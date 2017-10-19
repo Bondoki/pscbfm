@@ -48,7 +48,11 @@ int main(int argc, char* argv[])
 
 	//seed the globally available random number generators
 	RandomNumberGenerators rng;
-	rng.seedAll();
+	rng.seedAll("seeds.dat");
+    std::cerr << "std rand: " << std::setw(12) << std::rand()       << " =?= 764080779"  << "\n";
+    std::cerr << "RNG rand: " << std::setw(12) << rng.r250_rand32() << " =?= 4223731124" << "\n";
+    std::cerr << "RNG rand: " << std::setw(12) << rng.r250_drand()  << " =?= 0.803876"   << "\n";
+
 
 	// FeatureExcludedVolume<> is equivalent to FeatureExcludedVolume<FeatureLattice<bool> >
 	//typedef LOKI_TYPELIST_3(FeatureBondset,FeatureAttributes,FeatureLattice<uint8_t>FeatureExcludedVolume<FeatureLatticePowerOfTwo<> >) Features;
@@ -70,6 +74,11 @@ int main(int argc, char* argv[])
 	taskmanager.run(max_mcs/save_interval);
 	taskmanager.cleanup();
 
+
+    std::cerr << "std rand: " << std::setw(12) << std::rand()       << " =?= 1059906842" << "\n";
+    std::cerr << "RNG rand: " << std::setw(12) << rng.r250_rand32() << " =?= 3470226409" << "\n";
+    std::cerr << "RNG rand: " << std::setw(12) << rng.r250_drand()  << " =?=   0.580433" << "\n";
+    throw std::runtime_error("");
 	}
 	catch(std::exception& err){std::cerr<<err.what();}
 	return 0;
