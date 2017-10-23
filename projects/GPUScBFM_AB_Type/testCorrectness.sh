@@ -6,8 +6,11 @@ function checkSc()
     rm result.bfm
     cmake -DINSTALLDIR_LEMONADE="$( cd .. && pwd )/install" .. &&
     make &&
-    time "./bin/$name" ../../test-files/Melt_N512_nc1024_LeMonADe_GPU_RKC_ScBFM.bfm 1000 1000 result.bfm |
+    #time "./bin/$name" ../../test-files/Melt_N512_nc1024_LeMonADe_GPU_RKC_ScBFM.bfm 1000 1000 result.bfm |
+    time "./bin/$name" -i ../../test-files/Melt_N512_nc1024_LeMonADe_GPU_RKC_ScBFM.bfm -m 1000 -s 1000 -o result.bfm -e seeds.dat -g 1 |
     tee "run-$sTime.log"
     # cp result{,-norm}.bfm
-    colordiff <( hexdump -C result-norm.bfm ) <( hexdump -C result.bfm )
+    if [ -f result.bfm ]; then
+        colordiff <( hexdump -C result-norm.bfm ) <( hexdump -C result.bfm ) | head -20
+    fi
 }
