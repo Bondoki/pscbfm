@@ -6,6 +6,15 @@
  */
 
 
+#include <cstdio>                           // printf
+#include <cstdlib>                          // exit
+#include <ctime>
+#include <iostream>
+#include <stdexcept>
+#include <stdint.h>
+#include <sstream>
+
+
 #include "UpdaterGPUScBFM_AB_Type.h"
 
 __device__ __constant__ bool IsBondForbiddenTable_d [512]; //false-allowed; true-forbidden
@@ -14,22 +23,22 @@ __device__ __constant__ intCUDA DXTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5
 __device__ __constant__ intCUDA DYTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ intCUDA DZTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 
-__device__ __constant__ uint32_t NrOfMonomersSpeciesA_d;  // Nr of Monomer Species A
-__device__ __constant__ uint32_t NrOfMonomersSpeciesB_d;  // Nr of Monomer Species B
+__device__ __constant__ uint32_t nMonomersSpeciesA_d;  // Nr of Monomer Species A
+__device__ __constant__ uint32_t nMonomersSpeciesB_d;  // Nr of Monomer Species B
 
-__device__ __constant__ uint32_t LATTICE_X_d;  // Lattice size in X
-__device__ __constant__ uint32_t LATTICE_Y_d;  // Lattice size in Y
-__device__ __constant__ uint32_t LATTICE_Z_d;  // Lattice size in Z
+__device__ __constant__ uint32_t LATTICE_X_d;  // mLattice size in X
+__device__ __constant__ uint32_t LATTICE_Y_d;  // mLattice size in Y
+__device__ __constant__ uint32_t LATTICE_Z_d;  // mLattice size in Z
 
-__device__ __constant__ uint32_t LATTICE_XM1_d;  // Lattice size in X-1
-__device__ __constant__ uint32_t LATTICE_YM1_d;  // Lattice size in Y-1
-__device__ __constant__ uint32_t LATTICE_ZM1_d;  // Lattice size in Z-1
+__device__ __constant__ uint32_t LATTICE_XM1_d;  // mLattice size in X-1
+__device__ __constant__ uint32_t LATTICE_YM1_d;  // mLattice size in Y-1
+__device__ __constant__ uint32_t LATTICE_ZM1_d;  // mLattice size in Z-1
 
-__device__ __constant__ uint32_t LATTICE_XPRO_d;  // Lattice shift in X
-__device__ __constant__ uint32_t LATTICE_PROXY_d;  // Lattice shift in X*Y
+__device__ __constant__ uint32_t LATTICE_XPRO_d;  // mLattice shift in X
+__device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
 
-texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texLatticeRefOut;
-texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texLatticeTmpRef;
+texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texmLatticeRefOut;
+texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texmLatticeTmpRef;
 
 texture<intCUDA, cudaTextureType1D, cudaReadModeElementType> texPolymerAndMonomerIsEvenAndOnXRef;
 
@@ -49,154 +58,154 @@ __device__ uint32_t hash(uint32_t a)
 }
 
 __device__ uintCUDA IdxBondArray_d(intCUDA x, intCUDA  y, intCUDA z) {
-	return ((x & 7) + ((y & 7) << 3) + ((z & 7) << 6));
+    return ((x & 7) + ((y & 7) << 3) + ((z & 7) << 6));
 }
 
 
-__global__ void runSimulationScBFMCheckSpeziesA_gpu(intCUDA *PolymerSystem_d, uint8_t *LatticeTmp_d, MonoInfo *MonoInfo_d , const  uint32_t rn) {
+__global__ void runSimulationScBFMCheckSpeziesA_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d, MonoInfo *MonoInfo_d , const  uint32_t rn) {
 
 
-	  int idxA=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxA=blockIdx.x*blockDim.x+threadIdx.x;
 
 
-	  if(idxA < NrOfMonomersSpeciesA_d)
-	  {
-		 //select random monomer
-		 const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
+      if(idxA < nMonomersSpeciesA_d)
+      {
+         //select random monomer
+         const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
 
-		 //select random direction
-		 const uintCUDA random_int = hash(hash(idxA) ^ rn) % 6;
+         //select random direction
+         const uintCUDA random_int = hash(hash(idxA) ^ rn) % 6;
 
 
-		 const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		 const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		 const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-		 const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
+         const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+         const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+         const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+         const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
-		  //select random direction
-		  //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-		 const intCUDA dx = DXTable_d[random_int];
-		 const intCUDA dy = DYTable_d[random_int];
-		 const intCUDA dz = DZTable_d[random_int];
+          //select random direction
+          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+         const intCUDA dx = DXTable_d[random_int];
+         const intCUDA dy = DYTable_d[random_int];
+         const intCUDA dz = DZTable_d[random_int];
 
-		 //check for periodicity if necessary
+         //check for periodicity if necessary
 #ifdef NONPERIODICITY
 
-		 if((xPosMono + dx) < 0)
-			 return;
+         if((xPosMono + dx) < 0)
+             return;
 
-		 if((xPosMono + dx) >= LATTICE_XM1_d)
-			 return;
+         if((xPosMono + dx) >= LATTICE_XM1_d)
+             return;
 
-		 if((yPosMono + dy) < 0)
-			 return;
+         if((yPosMono + dy) < 0)
+             return;
 
-		 if((yPosMono + dy) >= LATTICE_YM1_d)
-			 return;
+         if((yPosMono + dy) >= LATTICE_YM1_d)
+             return;
 
-		 if((zPosMono + dz) < 0)
-			 return;
+         if((zPosMono + dz) < 0)
+             return;
 
-		 if((zPosMono + dz) >= LATTICE_ZM1_d)
-			 return;
+         if((zPosMono + dz) >= LATTICE_ZM1_d)
+             return;
 
 #endif
 
-		 const unsigned nextNeigborSize = ((MonoProperty&224)>>5);
+         const unsigned nextNeigborSize = ((MonoProperty&224)>>5);
 
 
-		  for(unsigned u=0; u < nextNeigborSize; u++)
-	      {
-			  const intCUDA nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
-			  const intCUDA nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
-			  const intCUDA nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
+          for(unsigned u=0; u < nextNeigborSize; u++)
+          {
+              const intCUDA nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
+              const intCUDA nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
+              const intCUDA nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
 
-		 	//IsBondForbiddenTable_d [512]; //false-allowed; true-forbidden
-		 	if( IsBondForbiddenTable_d[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
-		 		    		return;
+             //IsBondForbiddenTable_d [512]; //false-allowed; true-forbidden
+             if( IsBondForbiddenTable_d[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
+                             return;
 
-		  }
+          }
 
 
 
-		  //check the lattice
-		  uint8_t test = 0;
+          //check the lattice
+          uint8_t test = 0;
 
-		  const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
-		  const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
-		  const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
+          const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
+          const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
+          const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
 
-		  const uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
-		  const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
-		  const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
+          const uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
+          const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
+          const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
 
-		  const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
-		  const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
-		  const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
+          const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
+          const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
+          const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
 
-		  const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
-		  const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
-		  const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
+          const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
+          const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
+          const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
 
-		  switch (random_int >> 1)
-			  {
-			  case 0: //-+x
+          switch (random_int >> 1)
+              {
+              case 0: //-+x
 
-			  	  test =  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                    test =  tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 1: //-+y
+              case 1: //-+y
 
-				  test =  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                  test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 2: //-+z
+              case 2: //-+z
 
-		  		  test =  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                    test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  				  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
 
-			  		  break;
+                        break;
 
-			  }
+              }
 
-			  if (test) return;
+              if (test) return;
 
 
-		  // everything fits -> perform the move - add the information
-			  // possible move
+          // everything fits -> perform the move - add the information
+              // possible move
 
-		    PolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
+            mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
 
-		    LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
+            mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
 
 
 
@@ -205,319 +214,319 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu(intCUDA *PolymerSystem_d, ui
 
 
 
-	  }
-	}
+      }
+    }
 
 
-__global__ void runSimulationScBFMPerformSpeziesA_gpu(intCUDA *PolymerSystem_d, uint8_t *Lattice_d) {
+__global__ void runSimulationScBFMPerformSpeziesA_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLattice_d) {
 
 
-	  int idxA=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxA=blockIdx.x*blockDim.x+threadIdx.x;
 
 
-	  if(idxA < NrOfMonomersSpeciesA_d)
-	  {
-		  //select random monomer
-		  const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
+      if(idxA < nMonomersSpeciesA_d)
+      {
+          //select random monomer
+          const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
 
 
-		  const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
+          const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
 
-	  if(((MonoProperty&1) != 0))	//possible move
-	  {
-		  const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		  const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		  const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+      if(((MonoProperty&1) != 0))    //possible move
+      {
+          const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+          const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+          const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
 
-		  //select random direction
-		  const uintCUDA random_int = (MonoProperty&28)>>2;
+          //select random direction
+          const uintCUDA random_int = (MonoProperty&28)>>2;
 
-		  //select random direction
-		  //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+          //select random direction
+          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 
 
-		  const intCUDA dx = DXTable_d[random_int];
-		  const intCUDA dy = DYTable_d[random_int];
-		  const intCUDA dz = DZTable_d[random_int];
+          const intCUDA dx = DXTable_d[random_int];
+          const intCUDA dy = DYTable_d[random_int];
+          const intCUDA dz = DZTable_d[random_int];
 
-		 //check the lattice
-		 uint8_t test = 0;
+         //check the lattice
+         uint8_t test = 0;
 
-		 const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
-		 const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
-		 const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
+         const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
+         const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
+         const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
 
-		 const  uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
-		 const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
-		 const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
+         const  uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
+         const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
+         const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
 
-		 const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
-		 const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
-		 const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
+         const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
+         const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
+         const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
 
-		 const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
-		 const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
-		 const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
+         const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
+         const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
+         const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
 
-		  switch (random_int >> 1)
-			  {
-			  case 0: //-+x
+          switch (random_int >> 1)
+              {
+              case 0: //-+x
 
-			  	  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 1: //-+y
+              case 1: //-+y
 
-				  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                  test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 2: //-+z
+              case 2: //-+z
 
-		  		  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  				  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
 
-			  		  break;
+                        break;
 
-			  }
+              }
 
-			  if (test) return;
+              if (test) return;
 
 
-		  // everything fits -> perform the move - add the information
-		    //PolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-		    //PolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-		    //PolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
-		    PolymerSystem_d[4*randomMonomer+3] = MonoProperty | 2; // indicating allowed move
-		    Lattice_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
+          // everything fits -> perform the move - add the information
+            //mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
+            //mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
+            //mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+            mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | 2; // indicating allowed move
+            mLattice_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
 
 
-		    Lattice_d[xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d)]=0;
+            mLattice_d[xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d)]=0;
 
-	  }
+      }
 
-	}
+    }
 }
 
-__global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *PolymerSystem_d, uint8_t *LatticeTmp_d) {
+__global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d) {
 
 
-	  int idxA=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxA=blockIdx.x*blockDim.x+threadIdx.x;
 
-	  if(idxA < NrOfMonomersSpeciesA_d)
-	  {
-	  	  //select random monomer
-		  const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
-
-
-		  const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
-
-	  if(((MonoProperty&3) != 0))	//possible move
-	  {
-		  const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		  const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		  const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-
-		  //select random direction
-		  const uintCUDA random_int = (MonoProperty&28)>>2;
-
-		  //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-		  const intCUDA dx = DXTable_d[random_int];
-		  const intCUDA dy = DYTable_d[random_int];
-		  const intCUDA dz = DZTable_d[random_int];
+      if(idxA < nMonomersSpeciesA_d)
+      {
+            //select random monomer
+          const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
 
 
-		  // possible move but not allowed
-		  if(((MonoProperty&3) == 1))
-		  {
-			  LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+          const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
-			  PolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-		  }
-		  else //allowed move with all circumstance
-		  {
-			  PolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-			  PolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-			  PolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
-			  PolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+      if(((MonoProperty&3) != 0))    //possible move
+      {
+          const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+          const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+          const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
 
-			  LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+          //select random direction
+          const uintCUDA random_int = (MonoProperty&28)>>2;
 
-			  //LatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono 	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+          const intCUDA dx = DXTable_d[random_int];
+          const intCUDA dy = DYTable_d[random_int];
+          const intCUDA dz = DZTable_d[random_int];
 
-		  }
-		  // everything fits -> perform the move - add the information
 
-	  }
+          // possible move but not allowed
+          if(((MonoProperty&3) == 1))
+          {
+              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
 
-	  }
+              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+          }
+          else //allowed move with all circumstance
+          {
+              mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
+              mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
+              mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+
+              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+
+              //mLatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+
+          }
+          // everything fits -> perform the move - add the information
+
+      }
+
+      }
 }
 
 
-__global__ void runSimulationScBFMCheckSpeziesB_gpu(intCUDA *PolymerSystem_d, uint8_t *LatticeTmp_d, MonoInfo *MonoInfo_d , const  uint32_t rn) {
+__global__ void runSimulationScBFMCheckSpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d, MonoInfo *MonoInfo_d , const  uint32_t rn) {
 
 
-	  int idxB=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxB=blockIdx.x*blockDim.x+threadIdx.x;
 
 
-	  if(idxB < NrOfMonomersSpeciesB_d)
-	  {
-		  //select random monomer
-		  const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
+      if(idxB < nMonomersSpeciesB_d)
+      {
+          //select random monomer
+          const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
 
-		  //select random direction
-		  const uintCUDA random_int = hash(hash(idxB) ^ rn) % 6;
+          //select random direction
+          const uintCUDA random_int = hash(hash(idxB) ^ rn) % 6;
 
-		  const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		  const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		  const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-		  const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
+          const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+          const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+          const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+          const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
-		  //select random direction
-		  //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-		  const intCUDA dx = DXTable_d[random_int];
-		  const intCUDA dy = DYTable_d[random_int];
-		  const intCUDA dz = DZTable_d[random_int];
-		  const unsigned nextNeigborSize = ((MonoProperty&224)>>5);
+          //select random direction
+          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+          const intCUDA dx = DXTable_d[random_int];
+          const intCUDA dy = DYTable_d[random_int];
+          const intCUDA dz = DZTable_d[random_int];
+          const unsigned nextNeigborSize = ((MonoProperty&224)>>5);
 
 #ifdef NONPERIODICITY
 
-		 if((xPosMono + dx) < 0)
-			 return;
+         if((xPosMono + dx) < 0)
+             return;
 
-		 if((xPosMono + dx) >= LATTICE_XM1_d)
-			 return;
+         if((xPosMono + dx) >= LATTICE_XM1_d)
+             return;
 
-		 if((yPosMono + dy) < 0)
-			 return;
+         if((yPosMono + dy) < 0)
+             return;
 
-		 if((yPosMono + dy) >= LATTICE_YM1_d)
-			 return;
+         if((yPosMono + dy) >= LATTICE_YM1_d)
+             return;
 
-		 if((zPosMono + dz) < 0)
-			 return;
+         if((zPosMono + dz) < 0)
+             return;
 
-		 if((zPosMono + dz) >= LATTICE_ZM1_d)
-			 return;
+         if((zPosMono + dz) >= LATTICE_ZM1_d)
+             return;
 
 #endif
 
-		 for(unsigned u=0; u < nextNeigborSize; u++)
-		 {
-			  intCUDA nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
-			  intCUDA nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
-			  intCUDA nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
+         for(unsigned u=0; u < nextNeigborSize; u++)
+         {
+              intCUDA nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
+              intCUDA nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
+              intCUDA nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
 
-		 		    	//IsBondForbiddenTable_d [512]; //false-allowed; true-forbidden
-		 		    	if( IsBondForbiddenTable_d[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
-		 		    		return;
+                         //IsBondForbiddenTable_d [512]; //false-allowed; true-forbidden
+                         if( IsBondForbiddenTable_d[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
+                             return;
 
-		 }
+         }
 
-		//check the lattice
-		uint8_t test = 0;
+        //check the lattice
+        uint8_t test = 0;
 
-		const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
-		const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
-		const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
+        const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
+        const uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
+        const uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
 
-		const uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
-		const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
-		const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
+        const uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
+        const uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
+        const uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
 
-		const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
-		const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
-		const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
+        const uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
+        const uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
+        const uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
 
-		const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
-		const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
-		const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
+        const uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
+        const uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
+        const uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
 
-		switch (random_int >> 1)
-		{
-		 case 0: //-+x
-			 	 test =  tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-			 	 	 	 tex1Dfetch(texLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-			  	  break;
+        switch (random_int >> 1)
+        {
+         case 0: //-+x
+                  test =  tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                    break;
 
-		  case 1: //-+y
+          case 1: //-+y
 
-			  test =  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+              test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
 
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
 
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-			  		  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-			  	  break;
+                    break;
 
-		  case 2: //-+z
+          case 2: //-+z
 
-	  		  test =  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  		  	  	  tex1Dfetch(texLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-	  				  tex1Dfetch(texLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
 
-		  		  break;
+                    break;
 
-		}
+        }
 
-		if (test) return;
+        if (test) return;
 
 
-		  // everything fits -> perform the move - add the information
-			  // possible move
-		  PolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
+          // everything fits -> perform the move - add the information
+              // possible move
+          mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
 
-		  LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
+          mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
 
 
 
@@ -526,1259 +535,1169 @@ __global__ void runSimulationScBFMCheckSpeziesB_gpu(intCUDA *PolymerSystem_d, ui
 
 
 
-	  }
-	}
+      }
+    }
 
 
-__global__ void runSimulationScBFMPerformSpeziesB_gpu(intCUDA *PolymerSystem_d, uint8_t *Lattice_d) {
+__global__ void runSimulationScBFMPerformSpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLattice_d) {
 
 
-	  int idxB=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxB=blockIdx.x*blockDim.x+threadIdx.x;
 
 
-	  if(idxB < NrOfMonomersSpeciesB_d)
-	  {
-		  //select random monomer
-		  const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
+      if(idxB < nMonomersSpeciesB_d)
+      {
+          //select random monomer
+          const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
 
-		  const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
+          const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
 
-	if(((MonoProperty&1) != 0))	//possible move
-	  {
-		const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+    if(((MonoProperty&1) != 0))    //possible move
+      {
+        const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+        const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+        const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
 
-		  //select random direction
-		const uintCUDA random_int = (MonoProperty&28)>>2;
+          //select random direction
+        const uintCUDA random_int = (MonoProperty&28)>>2;
 
-		 //select random direction
-		 //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+         //select random direction
+         //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 
-		const intCUDA dx = DXTable_d[random_int];
-		const intCUDA dy = DYTable_d[random_int];
-		const intCUDA dz = DZTable_d[random_int];
+        const intCUDA dx = DXTable_d[random_int];
+        const intCUDA dy = DYTable_d[random_int];
+        const intCUDA dz = DZTable_d[random_int];
 
-		//check the lattice
-		uint8_t test = 0;
+        //check the lattice
+        uint8_t test = 0;
 
-		const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
-		const  uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
-		const  uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
+        const uint32_t xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
+        const  uint32_t yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
+        const  uint32_t zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
 
-		const  uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
-		const  uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
-		const  uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
+        const  uint32_t xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
+        const  uint32_t xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
+        const  uint32_t xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
 
-		const  uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
-		const  uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
-		const  uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
+        const  uint32_t yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
+        const  uint32_t yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
+        const  uint32_t yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
 
-		const  uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
-		const  uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
-		const  uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
+        const  uint32_t zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
+        const  uint32_t zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
+        const  uint32_t zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
 
-		  switch (random_int >> 1)
-			  {
-			  case 0: //-+x
+          switch (random_int >> 1)
+              {
+              case 0: //-+x
 
-			  	  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 1: //-+y
+              case 1: //-+y
 
-				  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                  test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
 
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-				  		  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
 
-				  	  break;
+                        break;
 
-			  case 2: //-+z
+              case 2: //-+z
 
-		  		  test =  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
 
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  		  	  	  tex1Dfetch(texLatticeTmpRef, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-		  				  tex1Dfetch(texLatticeTmpRef, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
+                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
 
-			  		  break;
+                        break;
 
-			  }
+              }
 
-		if (test) return;
+        if (test) return;
 
 
-		  // everything fits -> perform the move - add the information
+          // everything fits -> perform the move - add the information
 
-		    //PolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-		    //PolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-		    //PolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
-		    PolymerSystem_d[4*randomMonomer+3] = MonoProperty | 2; // indicating allowed move
-		    Lattice_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
+            //mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
+            //mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
+            //mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+            mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | 2; // indicating allowed move
+            mLattice_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
 
 
-		    Lattice_d[xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d)]=0;
+            mLattice_d[xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d)]=0;
 
-	  }
+      }
 
-	}
+    }
 }
 
-__global__ void runSimulationScBFMZeroArraySpeziesB_gpu(intCUDA *PolymerSystem_d, uint8_t *LatticeTmp_d) {
+__global__ void runSimulationScBFMZeroArraySpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d) {
 
 
-	  int idxB=blockIdx.x*blockDim.x+threadIdx.x;
+      int idxB=blockIdx.x*blockDim.x+threadIdx.x;
 
-	  if(idxB < NrOfMonomersSpeciesB_d)
-	  {
-	  	  //select random monomer
-		  const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
-
-
-		  const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
-
-	  if(((MonoProperty&3) != 0))	//possible move
-	  {
-		  const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-		  const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-		  const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-
-		  //select random direction
-		  const uintCUDA random_int = (tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3)&28)>>2;
-
-		  //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-		  const intCUDA dx = DXTable_d[random_int];
-		  const intCUDA dy = DYTable_d[random_int];
-		  const intCUDA dz = DZTable_d[random_int];
+      if(idxB < nMonomersSpeciesB_d)
+      {
+            //select random monomer
+          const uint32_t randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
 
 
+          const intCUDA MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
 
-		  if(((MonoProperty&3) == 1))
-		  {
-			  LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+      if(((MonoProperty&3) != 0))    //possible move
+      {
+          const intCUDA xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+          const intCUDA yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+          const intCUDA zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
 
-			  PolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+          //select random direction
+          const uintCUDA random_int = (tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3)&28)>>2;
 
-		  }
-		  else
-		  {
-			  PolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-			  PolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-			  PolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
-			  PolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-
-			  LatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-			  //LatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono 	 )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-		  }
-		  // everything fits -> perform the move - add the information
-		  //  PolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+          const intCUDA dx = DXTable_d[random_int];
+          const intCUDA dy = DYTable_d[random_int];
+          const intCUDA dz = DZTable_d[random_int];
 
 
-	  }
 
-	  }
+          if(((MonoProperty&3) == 1))
+          {
+              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+
+              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+
+          }
+          else
+          {
+              mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
+              mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
+              mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+
+              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+
+              //mLatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+
+          }
+          // everything fits -> perform the move - add the information
+          //  mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
+
+
+      }
+
+      }
 }
 
 
 
 
 
-UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type() {
+UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
+{
+    std::cout << "[" << __FILE__ << "::~UpdaterGPUScBFM_AB_Type" << "] destructor" << std::endl;
 
-	std::cout << "destructor" << std::endl;
-
-	delete[] Lattice;
-	delete[] PolymerSystem;
-	delete[] AttributeSystem;
-
-	for (int a = 0; a < NrOfAllMonomers; ++a) // we will delete all of them
-	{
-		delete(monosNNidx[a]);
-
-	}
-
-	delete(monosNNidx);
+    delete[] mLattice;
+    delete[] mPolymerSystem;
+    delete[] mAttributeSystem;
+    for ( size_t i = 0; i < nAllMonomers; ++i )
+        delete monosNNidx[i];
+    delete monosNNidx;
 
 }
 
-void UpdaterGPUScBFM_AB_Type::initialize(int idxGPU) {
+void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
+{
+    /**** Print some GPU information ****/
+    cudaDeviceProp prop;
 
-	cudaDeviceProp  prop;
+    int nGpus;
+    CUDA_CHECK( cudaGetDeviceCount( &nGpus ) );
 
-	int count;
-	CUDA_CHECK( cudaGetDeviceCount( &count ) );
+    for ( int i = 0; i < nGpus; ++i )
+    {
+        CUDA_CHECK( cudaGetDeviceProperties( &prop, i ) );
+        printf( "   --- General Information for device %d ---\n", i );
+        printf( "Name:  %s\n", prop.name );
+        printf( "Compute capability:  %d.%d\n", prop.major, prop.minor );
+        printf( "Clock rate:  %d\n", prop.clockRate );
+        printf( "Device copy overlap: %s\n", prop.deviceOverlap ? "Enabled" : "Disabled" );
+        printf( "Kernel execution timeout : %s\n", prop.kernelExecTimeoutEnabled ? "Enabled" : "Disabled" );
+        printf( "   --- Memory Information for device %d ---\n", i );
+        printf( "Total global mem:  %ld\n", prop.totalGlobalMem );
+        printf( "Total constant Mem:  %ld\n", prop.totalConstMem );
+        printf( "Max mem pitch:  %ld\n", prop.memPitch );
+        printf( "Texture Alignment:  %ld\n", prop.textureAlignment );
 
-	for (int i=0; i< count; i++) {
-		CUDA_CHECK( cudaGetDeviceProperties( &prop, i ) );
-		printf( "   --- General Information for device %d ---\n", i );
-		printf( "Name:  %s\n", prop.name );
-		printf( "Compute capability:  %d.%d\n", prop.major, prop.minor );
-		printf( "Clock rate:  %d\n", prop.clockRate );
-		printf( "Device copy overlap:  " );
-		if (prop.deviceOverlap)
-			printf( "Enabled\n" );
-		else
-			printf( "Disabled\n");
-		printf( "Kernel execution timeout :  " );
-		if (prop.kernelExecTimeoutEnabled)
-			printf( "Enabled\n" );
-		else
-			printf( "Disabled\n" );
+        printf( "   --- MP Information for device %d ---\n", i );
+        printf( "Multiprocessor count:  %d\n", prop.multiProcessorCount );
+        printf( "Shared mem per mp:  %ld\n", prop.sharedMemPerBlock );
+        printf( "Registers per mp:  %d\n", prop.regsPerBlock );
+        printf( "Threads in warp:  %d\n", prop.warpSize );
+        printf( "Max threads per block:  %d\n", prop.maxThreadsPerBlock );
+        printf( "Max thread dimensions:  (%d, %d, %d)\n",
+                prop.maxThreadsDim[0],
+                prop.maxThreadsDim[1],
+                prop.maxThreadsDim[2] );
+        printf( "Max grid dimensions:  (%d, %d, %d)\n",
+                prop.maxGridSize[0],
+                prop.maxGridSize[1],
+                prop.maxGridSize[2] );
+        printf( "\n" );
+    }
 
-		printf( "   --- Memory Information for device %d ---\n", i );
-		printf( "Total global mem:  %ld\n", prop.totalGlobalMem );
-		printf( "Total constant Mem:  %ld\n", prop.totalConstMem );
-		printf( "Max mem pitch:  %ld\n", prop.memPitch );
-		printf( "Texture Alignment:  %ld\n", prop.textureAlignment );
+    if ( iGpuToUse >= nGpus )
+    {
+        std::cout << "GPU with ID " << iGpuToUse << " not present. Only " << nGpus << " GPUs are available. Exiting..." << std::endl;
+        throw std::runtime_error( "Can not find GPU or GPU not present. Exiting..." );
+    }
 
-		printf( "   --- MP Information for device %d ---\n", i );
-		printf( "Multiprocessor count:  %d\n",
-				prop.multiProcessorCount );
-		printf( "Shared mem per mp:  %ld\n", prop.sharedMemPerBlock );
-		printf( "Registers per mp:  %d\n", prop.regsPerBlock );
-		printf( "Threads in warp:  %d\n", prop.warpSize );
-		printf( "Max threads per block:  %d\n", prop.maxThreadsPerBlock );
-		printf( "Max thread dimensions:  (%d, %d, %d)\n",
-				prop.maxThreadsDim[0], prop.maxThreadsDim[1],
-				prop.maxThreadsDim[2] );
-		printf( "Max grid dimensions:  (%d, %d, %d)\n",
-				prop.maxGridSize[0], prop.maxGridSize[1],
-				prop.maxGridSize[2] );
-		printf( "\n" );
-	}
+    /* choose GPU to use */
+    CUDA_CHECK( cudaSetDevice( iGpuToUse ));
 
-	if(idxGPU >= count)
-	{
-		std::cout << "GPU with idx " << idxGPU << " not present. Exiting..." << std::endl;
-		throw std::runtime_error("Can not find GPU or GPU not present. Exiting...");
-	}
-	CUDA_CHECK( cudaSetDevice(idxGPU));
 
-	// Init RNG
-	//r250.Initialize(time(NULL));
-	// is already initialized
+    /**** create the BondTable and copy to constant memory ****/
+    std::cout << "copy BondTable: " << std::endl;
+    //false-allowed; true-forbidden
+    bool *tmp_IsBondForbiddenTable = (bool *) malloc(sizeof(bool)*512);
 
-	// create the BondTable and copy to constant memory
-	 //false-allowed; true-forbidden
-	std::cout << "copy BondTable: " << std::endl;
-	bool *tmp_IsBondForbiddenTable = (bool *) malloc(sizeof(bool)*512);
+    uint counter=0;
+    for(int i = 0; i < 512; i++)
+    {
+        tmp_IsBondForbiddenTable[i]=false;
+        tmp_IsBondForbiddenTable[i]=forbiddenBonds[i];
 
-	uint counter=0;
-	for(int i = 0; i < 512; i++)
-	{
-		tmp_IsBondForbiddenTable[i]=false;
-		tmp_IsBondForbiddenTable[i]=NotAllowedBondArray[i];
+        std::cout << "bond: " << i << "  " << tmp_IsBondForbiddenTable[i] << "  " << forbiddenBonds[i] << std::endl;
 
-		std::cout << "bond: " << i << "  " << tmp_IsBondForbiddenTable[i] << "  " << NotAllowedBondArray[i] << std::endl;
+        if (tmp_IsBondForbiddenTable[i] == false)
+            counter++;
+    }
+    std::cout << "used bond in simulation: " << counter << " / 108 " << std::endl;
 
-		if (tmp_IsBondForbiddenTable[i] == false)
-			counter++;
-	}
-	std::cout << "used bond in simulation: " << counter << " / 108 " << std::endl;
+    if(counter != 108)
+    {
+        throw std::runtime_error("wrong bond-set!!! Exiting... \n");
+    }
 
-	if(counter != 108)
-	{
-		throw std::runtime_error("wrong bond-set!!! Exiting... \n");
-	}
+    CUDA_CHECK(cudaMemcpyToSymbol(IsBondForbiddenTable_d, tmp_IsBondForbiddenTable, sizeof(bool)*512));
 
-	CUDA_CHECK(cudaMemcpyToSymbol(IsBondForbiddenTable_d, tmp_IsBondForbiddenTable, sizeof(bool)*512));
+    free(tmp_IsBondForbiddenTable);
 
-	free(tmp_IsBondForbiddenTable);
+    //creating the displacement arrays
+    std::cout << "copy DXYZTable: " << std::endl;
+    intCUDA *tmp_DXTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
+    intCUDA *tmp_DYTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
+    intCUDA *tmp_DZTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
 
-	//creating the displacement arrays
-	std::cout << "copy DXYZTable: " << std::endl;
-	intCUDA *tmp_DXTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
-	intCUDA *tmp_DYTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
-	intCUDA *tmp_DZTable = (intCUDA *) malloc(sizeof(intCUDA)*6);
+    tmp_DXTable[0]=-1; tmp_DXTable[1]= 1; tmp_DXTable[2]= 0; tmp_DXTable[3]= 0; tmp_DXTable[4]= 0; tmp_DXTable[5]= 0;
+    tmp_DYTable[0]= 0; tmp_DYTable[1]= 0; tmp_DYTable[2]=-1; tmp_DYTable[3]= 1; tmp_DYTable[4]= 0; tmp_DYTable[5]= 0;
+    tmp_DZTable[0]= 0; tmp_DZTable[1]= 0; tmp_DZTable[2]= 0; tmp_DZTable[3]= 0; tmp_DZTable[4]=-1; tmp_DZTable[5]= 1;
 
-	tmp_DXTable[0]=-1; tmp_DXTable[1]= 1; tmp_DXTable[2]= 0; tmp_DXTable[3]= 0; tmp_DXTable[4]= 0; tmp_DXTable[5]= 0;
-	tmp_DYTable[0]= 0; tmp_DYTable[1]= 0; tmp_DYTable[2]=-1; tmp_DYTable[3]= 1; tmp_DYTable[4]= 0; tmp_DYTable[5]= 0;
-	tmp_DZTable[0]= 0; tmp_DZTable[1]= 0; tmp_DZTable[2]= 0; tmp_DZTable[3]= 0; tmp_DZTable[4]=-1; tmp_DZTable[5]= 1;
+    CUDA_CHECK(cudaMemcpyToSymbol(DXTable_d, tmp_DXTable, sizeof(intCUDA)*6));
+    CUDA_CHECK(cudaMemcpyToSymbol(DYTable_d, tmp_DYTable, sizeof(intCUDA)*6));
+    CUDA_CHECK(cudaMemcpyToSymbol(DZTable_d, tmp_DZTable, sizeof(intCUDA)*6));
 
-	CUDA_CHECK(cudaMemcpyToSymbol(DXTable_d, tmp_DXTable, sizeof(intCUDA)*6));
-	CUDA_CHECK(cudaMemcpyToSymbol(DYTable_d, tmp_DYTable, sizeof(intCUDA)*6));
-	CUDA_CHECK(cudaMemcpyToSymbol(DZTable_d, tmp_DZTable, sizeof(intCUDA)*6));
-
-	free(tmp_DXTable);
-	free(tmp_DYTable);
-	free(tmp_DZTable);
+    free( tmp_DXTable );
+    free( tmp_DYTable );
+    free( tmp_DZTable );
 
     /***************************creating look-up for species*****************************************/
 
-	uint32_t NrOfMonomersSpezies_A_host = 0;
-	uint32_t NrOfMonomersSpezies_B_host = 0;
+    uint32_t nMonomersSpezies_A_host = 0;
+    uint32_t nMonomersSpezies_B_host = 0;
 
-	uint32_t *MonomersSpezies_host =(uint32_t *) malloc((NrOfAllMonomers)*sizeof(uint32_t));
+    uint32_t *MonomersSpezies_host =(uint32_t *) malloc((nAllMonomers)*sizeof(uint32_t));
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-		{
-				//monomer is odd or even
+    for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+        //monomer is odd or even
 
-				if(AttributeSystem[i] == 1)
-				{
-					MonomersSpezies_host[i]=1;
-					//PolymerSystem_host[4*i+3]=0;
-					//NrOfMonomersSpezies_A_host++;
-				}
-				if(AttributeSystem[i] == 2)
-				{
-					MonomersSpezies_host[i]=2;
+        if(mAttributeSystem[i] == 1)
+        {
+            MonomersSpezies_host[i]=1;
+            //mPolymerSystem_host[4*i+3]=0;
+            //nMonomersSpezies_A_host++;
+        }
+        if(mAttributeSystem[i] == 2)
+        {
+            MonomersSpezies_host[i]=2;
 
-				}
-				if(AttributeSystem[i] == 0)
-				{
-					throw std::runtime_error("wrong attributes!!! Exiting... \n");
-				}
-		}
+        }
+        if(mAttributeSystem[i] == 0)
+        {
+            throw std::runtime_error("wrong attributes!!! Exiting... \n");
+        }
+    }
 
 /*
-	// NrOfMonomersPerStarArm is an odd number
-	uint32_t NStar = 4*NrOfMonomersPerStarArm+1;
-	
-	for (uint32_t st=0; st<NrOfStars; st++)
-			{
-				//Center
-				MonomersSpezies_host[st*NStar     ]=1;
+    // nMonomersPerStarArm is an odd number
+    uint32_t NStar = 4*nMonomersPerStarArm+1;
 
-				//first arm
-				for(uint32_t onarm=1; onarm <= NrOfMonomersPerStarArm; onarm++)
-				{
-					uint32_t tag = (onarm%2)+1;
-					MonomersSpezies_host[st*NStar + onarm ]=tag;
-				}
+    for (uint32_t st=0; st<nStars; st++)
+    {
+        //Center
+        MonomersSpezies_host[st*NStar     ]=1;
 
-				//second arm
-				for(uint32_t onarm=1; onarm <= NrOfMonomersPerStarArm; onarm++)
-				{
-					uint32_t tag = (onarm%2)+1;
-					MonomersSpezies_host[st*NStar + NrOfMonomersPerStarArm + onarm ]=tag;
-				}
+        //first arm
+        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
+        {
+            uint32_t tag = (onarm%2)+1;
+            MonomersSpezies_host[st*NStar + onarm ]=tag;
+        }
 
-				//third arm
-				for(uint32_t onarm=1; onarm <= NrOfMonomersPerStarArm; onarm++)
-				{
-					uint32_t tag = (onarm%2)+1;
-					MonomersSpezies_host[st*NStar + 2*NrOfMonomersPerStarArm + onarm ]=tag;
-				}
+        //second arm
+        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
+        {
+            uint32_t tag = (onarm%2)+1;
+            MonomersSpezies_host[st*NStar + nMonomersPerStarArm + onarm ]=tag;
+        }
 
-				//quad arm
-				for(uint32_t onarm=1; onarm <= NrOfMonomersPerStarArm; onarm++)
-				{
-					uint32_t tag = (onarm%2)+1;
-					MonomersSpezies_host[st*NStar + 3*NrOfMonomersPerStarArm + onarm ]=tag;
-				}
+        //third arm
+        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
+        {
+            uint32_t tag = (onarm%2)+1;
+            MonomersSpezies_host[st*NStar + 2*nMonomersPerStarArm + onarm ]=tag;
+        }
 
-		 	}
+        //quad arm
+        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
+        {
+            uint32_t tag = (onarm%2)+1;
+            MonomersSpezies_host[st*NStar + 3*nMonomersPerStarArm + onarm ]=tag;
+        }
 
-		//uint32_t offset = (NStar*NrOfStars);
-		//
-		//for (uint32_t i=0; i<NrOfCrosslinker; i++)
-		//{
-		//	MonomersSpezies_host[offset + i]=1;
-		//}
-		
-		//for olympic the additional monomers behave as cross-linker
-		for (uint32_t i=(NStar*NrOfStars); i<NrOfAllMonomers; i++)
-		{
-			MonomersSpezies_host[i]=1;
-		}
-		
+     }
+
+    //uint32_t offset = (NStar*nStars);
+    //
+    //for (uint32_t i=0; i<nCrosslinker; i++)
+    //{
+    //    MonomersSpezies_host[offset + i]=1;
+    //}
+
+    //for olympic the additional monomers behave as cross-linker
+    for (uint32_t i=(NStar*nStars); i<nAllMonomers; i++)
+        MonomersSpezies_host[i]=1;
+
 */
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-		{
-				//monomer is odd or even
+    for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+        //monomer is odd or even
 
-				if( MonomersSpezies_host[i]==1)
-					NrOfMonomersSpezies_A_host++;
+        if( MonomersSpezies_host[i]==1)
+            nMonomersSpezies_A_host++;
 
-				if( MonomersSpezies_host[i]==2)
-					NrOfMonomersSpezies_B_host++;
-		}
+        if( MonomersSpezies_host[i]==2)
+            nMonomersSpezies_B_host++;
+    }
 
-	std::cout << "NrOfMonomersSpezies_A: " << NrOfMonomersSpezies_A_host << std::endl;
-	std::cout << "NrOfMonomersSpezies_B: " << NrOfMonomersSpezies_B_host << std::endl;
+    std::cout << "nMonomersSpezies_A: " << nMonomersSpezies_A_host << std::endl;
+    std::cout << "nMonomersSpezies_B: " << nMonomersSpezies_B_host << std::endl;
 
-	if((NrOfMonomersSpezies_A_host+NrOfMonomersSpezies_B_host) != NrOfAllMonomers)
-	{
-		throw std::runtime_error("Nr Of MonomerSpezies doesn´t met!!! Exiting... \n");
-	}
+    if((nMonomersSpezies_A_host+nMonomersSpezies_B_host) != nAllMonomers)
+    {
+        throw std::runtime_error("Nr Of MonomerSpezies doesn´t met!!! Exiting... \n");
+    }
 
-	MonomersSpeziesIdx_A_host =(uint32_t *) malloc((NrOfMonomersSpezies_A_host)*sizeof(uint32_t));
-	MonomersSpeziesIdx_B_host =(uint32_t *) malloc((NrOfMonomersSpezies_B_host)*sizeof(uint32_t));
+    MonomersSpeziesIdx_A_host =(uint32_t *) malloc((nMonomersSpezies_A_host)*sizeof(uint32_t));
+    MonomersSpeziesIdx_B_host =(uint32_t *) malloc((nMonomersSpezies_B_host)*sizeof(uint32_t));
 
-	uint32_t NrOfMonomersSpezies_A_host_dummy = 0;
-	uint32_t NrOfMonomersSpezies_B_host_dummy = 0;
+    uint32_t nMonomersSpezies_A_host_dummy = 0;
+    uint32_t nMonomersSpezies_B_host_dummy = 0;
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-	{
-			//monomer is odd or even
+    for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+        //monomer is odd or even
 
-			if( MonomersSpezies_host[i]==1)
-			//else
-			{
-				MonomersSpeziesIdx_A_host[NrOfMonomersSpezies_A_host_dummy]=i;
-				//PolymerSystem_host[4*i+3]=0;
-				NrOfMonomersSpezies_A_host_dummy++;
-			}
+        if( MonomersSpezies_host[i]==1)
+        //else
+        {
+            MonomersSpeziesIdx_A_host[nMonomersSpezies_A_host_dummy]=i;
+            //mPolymerSystem_host[4*i+3]=0;
+            nMonomersSpezies_A_host_dummy++;
+        }
 
-			if( MonomersSpezies_host[i]==2)
-			{
-				MonomersSpeziesIdx_B_host[NrOfMonomersSpezies_B_host_dummy]=i;
-				//PolymerSystem_host[4*i+3]=32;
-				NrOfMonomersSpezies_B_host_dummy++;
-			}
-	}
+        if( MonomersSpezies_host[i]==2)
+        {
+            MonomersSpeziesIdx_B_host[nMonomersSpezies_B_host_dummy]=i;
+            //mPolymerSystem_host[4*i+3]=32;
+            nMonomersSpezies_B_host_dummy++;
+        }
+    }
 
-	if((NrOfMonomersSpezies_A_host != NrOfMonomersSpezies_A_host_dummy))
-		{
-			throw std::runtime_error("Nr Of MonomerSpezies_A_host doesn´t met!!! Exiting... \n");
-		}
+    if ( nMonomersSpezies_A_host != nMonomersSpezies_A_host_dummy )
+        throw std::runtime_error("Nr Of MonomerSpezies_A_host doesn´t met!!! Exiting... \n");
+    if ( nMonomersSpezies_B_host != nMonomersSpezies_B_host_dummy )
+        throw std::runtime_error("Nr Of MonomerSpezies_B_host doesn´t met!!! Exiting... \n");
 
-	if((NrOfMonomersSpezies_B_host != NrOfMonomersSpezies_B_host_dummy))
-		{
-			throw std::runtime_error("Nr Of MonomerSpezies_B_host doesn´t met!!! Exiting... \n");
-		}
+    std::cout << "create Look-Up-Thread-Table with size A: " << (nMonomersSpezies_A_host)*sizeof(uint32_t) << " bytes = " << ((nMonomersSpezies_A_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
+    std::cout << "create Look-Up-Thread-Table with size B: " << (nMonomersSpezies_B_host)*sizeof(uint32_t) << " bytes = " << ((nMonomersSpezies_B_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
 
+    CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_A_device, (nMonomersSpezies_A_host)*sizeof(uint32_t)));
+    CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_B_device, (nMonomersSpezies_B_host)*sizeof(uint32_t)));
 
-	std::cout << "create Look-Up-Thread-Table with size A: " << (NrOfMonomersSpezies_A_host)*sizeof(uint32_t) << " bytes = " << ((NrOfMonomersSpezies_A_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
-	std::cout << "create Look-Up-Thread-Table with size B: " << (NrOfMonomersSpezies_B_host)*sizeof(uint32_t) << " bytes = " << ((NrOfMonomersSpezies_B_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
+    std::cout << "copy Look-Up-Thread-Table with to GPU"<< std::endl;
+    CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpezies_A_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpezies_B_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
 
-	CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_A_device, (NrOfMonomersSpezies_A_host)*sizeof(uint32_t)));
-	CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_B_device, (NrOfMonomersSpezies_B_host)*sizeof(uint32_t)));
+    numblocksSpecies_A = (nMonomersSpezies_A_host-1)/NUMTHREADS+1;
+    std::cout << "calculate numBlocks Spezies A using" << (numblocksSpecies_A*NUMTHREADS) << "  needed: " << (nMonomersSpezies_A_host) <<  std::endl;
 
-	std::cout << "copy Look-Up-Thread-Table with to GPU"<< std::endl;
-	CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (NrOfMonomersSpezies_A_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
-	CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (NrOfMonomersSpezies_B_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
+    numblocksSpecies_B = (nMonomersSpezies_B_host-1)/NUMTHREADS+1;
+    std::cout << "calcluate numBlocks Spezies B using" << (numblocksSpecies_B*NUMTHREADS) << "  needed: " << (nMonomersSpezies_B_host) <<  std::endl;
 
-	numblocksSpecies_A = (NrOfMonomersSpezies_A_host-1)/NUMTHREADS+1;
-	std::cout << "calculate numBlocks Spezies A using" << (numblocksSpecies_A*NUMTHREADS) << "  needed: " << (NrOfMonomersSpezies_A_host) <<  std::endl;
+    //make constant:
+    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesA_d, &nMonomersSpezies_A_host, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesB_d, &nMonomersSpezies_B_host, sizeof(uint32_t)));
 
-	numblocksSpecies_B = (NrOfMonomersSpezies_B_host-1)/NUMTHREADS+1;
-	std::cout << "calcluate numBlocks Spezies B using" << (numblocksSpecies_B*NUMTHREADS) << "  needed: " << (NrOfMonomersSpezies_B_host) <<  std::endl;
+    /************************end: creating look-up for species*****************************************/
 
-	//make constant:
-	CUDA_CHECK(cudaMemcpyToSymbol(NrOfMonomersSpeciesA_d, &NrOfMonomersSpezies_A_host, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(NrOfMonomersSpeciesB_d, &NrOfMonomersSpezies_B_host, sizeof(uint32_t)));
+    /****************************copy monomer informations ********************************************/
 
-	/************************end: creating look-up for species*****************************************/
 
-	/****************************copy monomer informations ********************************************/
+    mPolymerSystem_host =(intCUDA *) malloc((4*nAllMonomers+1)*sizeof(intCUDA));
 
+    std::cout << "try to allocate : " << ((4*nAllMonomers+1)*sizeof(intCUDA)) << " bytes = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0)) << " kB = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0*1024.0)) << " MB coordinates on GPU " << std::endl;
 
-	PolymerSystem_host =(intCUDA *) malloc((4*NrOfAllMonomers+1)*sizeof(intCUDA));
+    CUDA_CHECK(cudaMalloc((void **) &mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA)));
 
-	std::cout << "try to allocate : " << ((4*NrOfAllMonomers+1)*sizeof(intCUDA)) << " bytes = " << ((4*NrOfAllMonomers+1)*sizeof(intCUDA)/(1024.0)) << " kB = " << ((4*NrOfAllMonomers+1)*sizeof(intCUDA)/(1024.0*1024.0)) << " MB coordinates on GPU " << std::endl;
 
-	CUDA_CHECK(cudaMalloc((void **) &PolymerSystem_device, (4*NrOfAllMonomers+1)*sizeof(intCUDA)));
+    for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+        mPolymerSystem_host[4*i]=(intCUDA) mPolymerSystem[3*i];
+        mPolymerSystem_host[4*i+1]=(intCUDA) mPolymerSystem[3*i+1];
+        mPolymerSystem_host[4*i+2]=(intCUDA) mPolymerSystem[3*i+2];
+        mPolymerSystem_host[4*i+3]=0;
+    }
 
+    // prepare and copy the connectivity matrix to GPU
+    // the index on GPU starts at 0 and is one less than loaded
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-	{
-		PolymerSystem_host[4*i]=(intCUDA) PolymerSystem[3*i];
-		PolymerSystem_host[4*i+1]=(intCUDA) PolymerSystem[3*i+1];
-		PolymerSystem_host[4*i+2]=(intCUDA) PolymerSystem[3*i+2];
-		PolymerSystem_host[4*i+3]=0;
-	}
+    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
 
-	// prepare and copy the connectivity matrix to GPU
-	// the index on GPU starts at 0 and is one less than loaded
+    std::cout << "size of strut MonoInfo: " << sizeof(MonoInfo) << " bytes = " << (sizeof(MonoInfo)/(1024.0)) <<  "kB for one monomer connectivity " << std::endl;
 
-	int sizeMonoInfo = NrOfAllMonomers * sizeof(MonoInfo);
+    std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = " << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0)) <<  "MB for connectivity matrix on GPU " << std::endl;
 
-	std::cout << "size of strut MonoInfo: " << sizeof(MonoInfo) << " bytes = " << (sizeof(MonoInfo)/(1024.0)) <<  "kB for one monomer connectivity " << std::endl;
 
-	std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = " << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0)) <<  "MB for connectivity matrix on GPU " << std::endl;
+    MonoInfo_host=(MonoInfo*) calloc(nAllMonomers,sizeof(MonoInfo));
+    CUDA_CHECK(  cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo));   // Allocate array of structure on device
 
 
-	MonoInfo_host=(MonoInfo*) calloc(NrOfAllMonomers,sizeof(MonoInfo));
-	CUDA_CHECK(  cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo));   // Allocate array of structure on device
+    for (uint32_t i=0; i<nAllMonomers; i++)
+        {
+            //MonoInfo_host[i].size = monosNNidx[i]->size;
+            if((monosNNidx[i]->size) > 7)
+            {
+                std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
+                throw std::runtime_error("Limit of connectivity on GPU reached!!! Exiting... \n");
+            }
 
+            mPolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
+            //cout << "mono:" << i << " vs " << (i) << endl;
+            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-		{
-			//MonoInfo_host[i].size = monosNNidx[i]->size;
-			if((monosNNidx[i]->size) > 7)
-			{
-				std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
-				throw std::runtime_error("Limit of connectivity on GPU reached!!! Exiting... \n");
-			}
+            for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
+            {
+                MonoInfo_host[i].bondsMonomerIdx[u] = monosNNidx[i]->bondsMonomerIdx[u];
 
-			PolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
-			//cout << "mono:" << i << " vs " << (i) << endl;
-			//cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
+                //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
+            }
+        }
 
-			for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
-			{
-				MonoInfo_host[i].bondsMonomerIdx[u] = monosNNidx[i]->bondsMonomerIdx[u];
+    // copy to connectivity to device
+    CUDA_CHECK( cudaMemcpy(MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice));
 
-				//cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
-			}
-		}
+    /****************************end: copy monomer informations ****************************************/
 
-	// copy to connectivity to device
-	CUDA_CHECK( cudaMemcpy(MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice));
+    checkSystem();
 
-	/****************************end: copy monomer informations ****************************************/
+    /****************************creating lattice******************************************************/
 
-	checkSystem();
+    uint32_t LATTICE_X = Box_X;
+    uint32_t LATTICE_Y = Box_Y;
+    uint32_t LATTICE_Z = Box_Z;
 
-	/****************************creating lattice******************************************************/
+    uint32_t LATTICE_XM1 = Box_XM1;
+    uint32_t LATTICE_YM1 = Box_YM1;
+    uint32_t LATTICE_ZM1 = Box_ZM1;
 
-	uint32_t LATTICE_X = Box_X;
-	uint32_t LATTICE_Y = Box_Y;
-	uint32_t LATTICE_Z = Box_Z;
+    uint32_t LATTICE_XPRO = Box_XPRO;
+    uint32_t LATTICE_PROXY = Box_PROXY;
 
-	uint32_t LATTICE_XM1 = Box_XM1;
-	uint32_t LATTICE_YM1 = Box_YM1;
-	uint32_t LATTICE_ZM1 = Box_ZM1;
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_X_d, &LATTICE_X, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Y_d, &LATTICE_Y, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Z_d, &LATTICE_Z, sizeof(uint32_t)));
 
-	uint32_t LATTICE_XPRO = Box_XPRO;
-	uint32_t LATTICE_PROXY = Box_PROXY;
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XM1_d, &LATTICE_XM1, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_YM1_d, &LATTICE_YM1, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_ZM1_d, &LATTICE_ZM1, sizeof(uint32_t)));
 
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_X_d, &LATTICE_X, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Y_d, &LATTICE_Y, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Z_d, &LATTICE_Z, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XPRO_d, &LATTICE_XPRO, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_PROXY_d, &LATTICE_PROXY, sizeof(uint32_t)));
 
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XM1_d, &LATTICE_XM1, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_YM1_d, &LATTICE_YM1, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_ZM1_d, &LATTICE_ZM1, sizeof(uint32_t)));
 
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XPRO_d, &LATTICE_XPRO, sizeof(uint32_t)));
-	CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_PROXY_d, &LATTICE_PROXY, sizeof(uint32_t)));
+    mLatticeOut_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
 
+    mLatticeTmp_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
 
-	LatticeOut_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
+    std::cout << "try to allocate : " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)) << " bytes = " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)/(1024.0*1024.0)) << " MB lattice on GPU " << std::endl;
 
-	LatticeTmp_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
 
-	std::cout << "try to allocate : " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)) << " bytes = " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)/(1024.0*1024.0)) << " MB lattice on GPU " << std::endl;
+    CUDA_CHECK(cudaMalloc((void **) &mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
+    CUDA_CHECK(cudaMalloc((void **) &mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
 
 
-	CUDA_CHECK(cudaMalloc((void **) &LatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
-	CUDA_CHECK(cudaMalloc((void **) &LatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
+    //copy information from Host to GPU
+    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+    {
+        mLatticeOut_host[i]=0;
+        mLatticeTmp_host[i]=0;
 
+    }
 
-	//copy information from Host to GPU
-	for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-	{
-		LatticeOut_host[i]=0;
-		LatticeTmp_host[i]=0;
+    //fill the tmpmLattice - should be zero everywhere
+    CUDA_CHECK(cudaMemcpy(mLatticeTmp_device, mLatticeTmp_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
+    //start z-curve
+    /*
+    for (int t = 0; t < nAllMonomers; t++)
+    {
+        uint32_t xk = (mPolymerSystem[3*t  ]&LATTICE_XM1);
+        uint32_t yk = (mPolymerSystem[3*t+1]&LATTICE_YM1);
+        uint32_t zk = (mPolymerSystem[3*t+2]&LATTICE_ZM1);
 
-	}
+        uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
 
-	//fill the tmpLattice - should be zero everywhere
-	CUDA_CHECK(cudaMemcpy(LatticeTmp_device, LatticeTmp_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
-	//start z-curve
-	/*
-	for (int t = 0; t < NrOfAllMonomers; t++) {
+        mLatticeOut_host[((mPolymerSystem_host[4*t+3] & 1) << 23) +inter3] = 1;
+    }
+    */
+    //end- z-curve
 
-			uint32_t xk = (PolymerSystem[3*t  ]&LATTICE_XM1);
-			uint32_t yk = (PolymerSystem[3*t+1]&LATTICE_YM1);
-			uint32_t zk = (PolymerSystem[3*t+2]&LATTICE_ZM1);
+    for (int t = 0; t < nAllMonomers; t++)
+    {
+        uint32_t xk = (mPolymerSystem[3*t  ]&LATTICE_XM1);
+        uint32_t yk = (mPolymerSystem[3*t+1]&LATTICE_YM1);
+        uint32_t zk = (mPolymerSystem[3*t+2]&LATTICE_ZM1);
 
-			uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
+        //uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
 
-			LatticeOut_host[((PolymerSystem_host[4*t+3] & 1) << 23) +inter3] = 1;
+        mLatticeOut_host[xk + (yk << LATTICE_XPRO) + (zk << LATTICE_PROXY)] = 1;
+    }
 
-	}
-	*/
-	//end- z-curve
+    std::cout << "checking the  mLatticeOut_host: " << std::endl;
+    CUDA_CHECK(cudaMemcpy(mLatticeOut_device, mLatticeOut_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
 
-	for (int t = 0; t < NrOfAllMonomers; t++) {
 
-			uint32_t xk = (PolymerSystem[3*t  ]&LATTICE_XM1);
-			uint32_t yk = (PolymerSystem[3*t+1]&LATTICE_YM1);
-			uint32_t zk = (PolymerSystem[3*t+2]&LATTICE_ZM1);
+    //fetch from device and check again
+    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+            mLattice[i]=0;
 
-			//uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
+    std::cout << "copy back mLatticeOut_host: " << std::endl;
+    CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
-			LatticeOut_host[xk + (yk << LATTICE_XPRO) + (zk << LATTICE_PROXY)] = 1;
+    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+        mLattice[i]=mLatticeOut_host[i];
 
-			}
+    std::cout << "copy back mLatticeTmp_host: " << std::endl;
+    CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
+    int dummyTmpCounter=0;
+    for (int x=0;x<LATTICE_X;x++)
+    for (int y=0;y<LATTICE_Y;y++)
+    for (int z=0;z<LATTICE_Z;z++)
+        dummyTmpCounter += ( mLatticeTmp_host[x + (y << LATTICE_XPRO) + ( z << LATTICE_PROXY)] == 0 ) ? 0 : 1;
 
+    std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
 
-	std::cout << "checking the  LatticeOut_host: " << std::endl;
-	CUDA_CHECK(cudaMemcpy(LatticeOut_device, LatticeOut_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
+    if(dummyTmpCounter != 0)
+        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
 
+    //start -z-order
+    /*
+    cout << "recalculate mLattice: " << endl;
+    //fetch from device and check again
+    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+    {
+        if(mLatticeOut_host[i]==1)
+        {
+            uint32_t dummyhost = i;
+            uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
+            uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
+            uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
+            uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
 
-	//fetch from device and check again
-	for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-			Lattice[i]=0;
 
-	std::cout << "copy back LatticeOut_host: " << std::endl;
-	CUDA_CHECK(cudaMemcpy(LatticeOut_host, LatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+            //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
+            mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
 
-	for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-		Lattice[i]=LatticeOut_host[i];
+        }
 
-	std::cout << "copy back LatticeTmp_host: " << std::endl;
-	CUDA_CHECK(cudaMemcpy(LatticeTmp_host, LatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+    }
+    */
+    //end -z-order
 
-	int dummyTmpCounter=0;
-	for (int x=0;x<LATTICE_X;x++)
-		for (int y=0;y<LATTICE_Y;y++)
-			for (int z=0;z<LATTICE_Z;z++)
-					 {
-						dummyTmpCounter += (LatticeTmp_host[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]==0)? 0 : 1;
-					 }
-	std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
 
-	if(dummyTmpCounter != 0)
-		throw std::runtime_error("Lattice occupation is wrong!!! Exiting... \n");
+    /*************************end: creating lattice****************************************************/
 
-	//start -z-order
-	/*
-	cout << "recalculate Lattice: " << endl;
-	//fetch from device and check again
-	for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-	{
-		if(LatticeOut_host[i]==1)
-		{
-			uint32_t dummyhost = i;
-			uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
-			uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
-			uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
-			uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
 
+    /*************************copy monomer positions***************************************************/
+    CUDA_CHECK(cudaMemcpy(mPolymerSystem_device, mPolymerSystem_host, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyHostToDevice));
+    /*************************end: copy monomer positions**********************************************/
 
-			//cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
-			Lattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
+    /*************************bind textures on GPU ****************************************************/
+    std::cout << "bind textures "  << std::endl;
+    //bind texture reference with linear memory
+    cudaBindTexture(0,texmLatticeRefOut,mLatticeOut_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
 
-		}
+    cudaBindTexture(0,texmLatticeTmpRef,mLatticeTmp_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
 
-	}
-	*/
-	//end -z-order
+    cudaBindTexture(0,texPolymerAndMonomerIsEvenAndOnXRef,mPolymerSystem_device,(4*nAllMonomers+1)*sizeof(intCUDA));
 
 
-	/*************************end: creating lattice****************************************************/
+    cudaBindTexture(0,texMonomersSpezies_A_ThreadIdx,MonomersSpeziesIdx_A_device,(nMonomersSpezies_A_host)*sizeof(uint32_t));
+    cudaBindTexture(0,texMonomersSpezies_B_ThreadIdx,MonomersSpeziesIdx_B_device,(nMonomersSpezies_B_host)*sizeof(uint32_t));
 
+    /*************************end: bind textures on GPU ************************************************/
 
-	/*************************copy monomer positions***************************************************/
-	CUDA_CHECK(cudaMemcpy(PolymerSystem_device, PolymerSystem_host, (4*NrOfAllMonomers+1)*sizeof(intCUDA), cudaMemcpyHostToDevice));
-	/*************************end: copy monomer positions**********************************************/
+    /*************************last check of system GPU *************************************************/
 
-	/*************************bind textures on GPU ****************************************************/
-	std::cout << "bind textures "  << std::endl;
-	//bind texture reference with linear memory
-	cudaBindTexture(0,texLatticeRefOut,LatticeOut_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
+    CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
 
-	cudaBindTexture(0,texLatticeTmpRef,LatticeTmp_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
+    for( uint32_t i = 0; i < nAllMonomers; ++i )
+    {
+        mPolymerSystem[3*i+0] = (int32_t) mPolymerSystem_host[4*i+0];
+        mPolymerSystem[3*i+1] = (int32_t) mPolymerSystem_host[4*i+1];
+        mPolymerSystem[3*i+2] = (int32_t) mPolymerSystem_host[4*i+2];
+    }
 
-	cudaBindTexture(0,texPolymerAndMonomerIsEvenAndOnXRef,PolymerSystem_device,(4*NrOfAllMonomers+1)*sizeof(intCUDA));
+    /* why two times ??? */
+    std::cout << "check system before simulation: " << std::endl;
+    checkSystem();
 
+    std::cout << "check system before simulation: " << std::endl;
+    checkSystem();
 
-	cudaBindTexture(0,texMonomersSpezies_A_ThreadIdx,MonomersSpeziesIdx_A_device,(NrOfMonomersSpezies_A_host)*sizeof(uint32_t));
-	cudaBindTexture(0,texMonomersSpezies_B_ThreadIdx,MonomersSpeziesIdx_B_device,(NrOfMonomersSpezies_B_host)*sizeof(uint32_t));
-
-	/*************************end: bind textures on GPU ************************************************/
-
-	/*************************last check of system GPU *************************************************/
-
-	CUDA_CHECK(cudaMemcpy(PolymerSystem_host, PolymerSystem_device, (4*NrOfAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
-
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-	{
-		PolymerSystem[3*i  ]=(int32_t) PolymerSystem_host[4*i  ];
-		PolymerSystem[3*i+1]=(int32_t) PolymerSystem_host[4*i+1];
-		PolymerSystem[3*i+2]=(int32_t) PolymerSystem_host[4*i+2];
-	}
-
-	std::cout << "check system before simulation: " << std::endl;
-
-	checkSystem();
-
-
-
-	std::cout << "check system before simulation: " << std::endl;
-
-	checkSystem();
-
-
-	/*************************end: last check of system GPU *********************************************/
-
+    /*************************end: last check of system GPU *********************************************/
 }
 
-void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers(uint32_t nrOfAllMonomers) {
-		NrOfAllMonomers = nrOfAllMonomers;
+void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t rnAllMonomers )
+{
+    nAllMonomers = rnAllMonomers;
+    std::cout << "[" << __FILE__ << "::setNrOfAllMonomers" << "] used monomers in simulation: " << nAllMonomers << std::endl;
 
-		std::cout << "used monomers in simulation: " << NrOfAllMonomers << std::endl;
+    mAttributeSystem = new int32_t[nAllMonomers];
+    mPolymerSystem   = new int32_t[nAllMonomers*3+1];    /* why +1 ??? */
 
-		AttributeSystem = new int32_t[NrOfAllMonomers];
-		PolymerSystem = new int32_t[3*NrOfAllMonomers+1];
-
-		//idx is reduced by one compared to the file
-		monosNNidx = new MonoNNIndex*[NrOfAllMonomers];
-
-		for (int a = 0; a < NrOfAllMonomers; ++a)
-		{
-			monosNNidx[a] = new MonoNNIndex();
-
-			monosNNidx[a]->size=0;
-
-			for(unsigned o=0; o < MAX_CONNECTIVITY; o++)
-			{
-				monosNNidx[a]->bondsMonomerIdx[o]=0;
-			}
-		}
-	}
+    //idx is reduced by one compared to the file
+    monosNNidx = new MonoNNIndex*[nAllMonomers];
+    for ( uint32_t a = 0; a < nAllMonomers; ++a )
+    {
+        monosNNidx[a] = new MonoNNIndex();
+        monosNNidx[a]->size=0;
+        for ( unsigned o = 0; o < MAX_CONNECTIVITY; ++o )
+            monosNNidx[a]->bondsMonomerIdx[o]=0;
+    }
+}
 
 void UpdaterGPUScBFM_AB_Type::setPeriodicity(bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ)
 {
-	//check if we are using periodic boundary condition and the simulations are do so
+    //check if we are using periodic boundary condition and the simulations are do so
 #ifdef NONPERIODICITY
-	if((isPeriodicX == true) || (isPeriodicY == true) || (isPeriodicZ == true) )
-	{
-		std::stringstream errormessage;
-		errormessage<<"Simulation is intended to use NON-PERIODIC BOUNDARY conditions.\n";
-		errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
-		errormessage<<"In X:"<<isPeriodicX<<"\n";
-		errormessage<<"In Y:"<<isPeriodicY<<"\n";
-		errormessage<<"In Z:"<<isPeriodicZ<<"\n";
-		errormessage<<"Logical Error! Exiting...\n";
-		throw std::runtime_error(errormessage.str());
-	}
+    if((isPeriodicX == true) || (isPeriodicY == true) || (isPeriodicZ == true) )
+    {
+        std::stringstream errormessage;
+        errormessage<<"Simulation is intended to use NON-PERIODIC BOUNDARY conditions.\n";
+        errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
+        errormessage<<"In X:"<<isPeriodicX<<"\n";
+        errormessage<<"In Y:"<<isPeriodicY<<"\n";
+        errormessage<<"In Z:"<<isPeriodicZ<<"\n";
+        errormessage<<"Logical Error! Exiting...\n";
+        throw std::runtime_error(errormessage.str());
+    }
 #else
-	if((isPeriodicX == false) || (isPeriodicY == false) || (isPeriodicZ == false) )
-	{
-		std::stringstream errormessage;
-		errormessage<<"Simulation is intended to use PERIODIC BOUNDARY conditions.\n";
-		errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
-		errormessage<<"In X:"<<isPeriodicX<<"\n";
-		errormessage<<"In Y:"<<isPeriodicY<<"\n";
-		errormessage<<"In Z:"<<isPeriodicZ<<"\n";
-		errormessage<<"Logical Error! Exiting...\n";
-		throw std::runtime_error(errormessage.str());
-	}
+    if((isPeriodicX == false) || (isPeriodicY == false) || (isPeriodicZ == false) )
+    {
+        std::stringstream errormessage;
+        errormessage<<"Simulation is intended to use PERIODIC BOUNDARY conditions.\n";
+        errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
+        errormessage<<"In X:"<<isPeriodicX<<"\n";
+        errormessage<<"In Y:"<<isPeriodicY<<"\n";
+        errormessage<<"In Z:"<<isPeriodicZ<<"\n";
+        errormessage<<"Logical Error! Exiting...\n";
+        throw std::runtime_error(errormessage.str());
+    }
 #endif
 
 }
 
-void UpdaterGPUScBFM_AB_Type::setNetworkIngredients(uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL) {
-
-	NrOfStars = numPEG; //number of Stars
-	NrOfMonomersPerStarArm = numPEGArm; //number OfMonomersPerStarArm
-	NrOfCrosslinker = numCL; //number of Crosslinker
-
-	std::cout << "NumPEG on GPU: " << NrOfStars << std::endl;
-	std::cout << "NumPEGArmlength on GPU: " << NrOfMonomersPerStarArm << std::endl;
-	std::cout << "NumCrosslinker on GPU: " << NrOfCrosslinker << std::endl;
-
-	//if (NrOfMonomersPerStarArm != 29)
-		//throw std::runtime_error("NrOfMonomersPerStarArm should be 29!!! Exiting...\n");
-
-	//if ((NrOfMonomersPerStarArm%2) != 1)
-		//	throw std::runtime_error("NrOfMonomersPerStarArm should be an odd number!!! Exiting...\n");
-
-}
-
-void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates(uint32_t idx, int32_t xcoor, int32_t ycoor, int32_t zcoor){
-
-	PolymerSystem[3*idx  ]=xcoor;
-	PolymerSystem[3*idx+1]=ycoor;
-	PolymerSystem[3*idx+2]=zcoor;
-
-	//std::cout << i << "\t x:" << PolymerSystem[3*i  ] << "\t y:" << PolymerSystem[3*i+1]<< "\t z:" << PolymerSystem[3*i+2]<< std::endl;
-}
-
-void UpdaterGPUScBFM_AB_Type::setAttribute(uint32_t idx, int32_t attrib){
-
-	//idx starts at 0
-	AttributeSystem[idx]=attrib;
-}
-
-void UpdaterGPUScBFM_AB_Type::copyBondSet(int dx, int dy, int dz, bool bondNotAllowed)
+void UpdaterGPUScBFM_AB_Type::setNetworkIngredients(uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL)
 {
-	 //false-allowed; true-forbidden
-	NotAllowedBondArray[IndexBondArray(dx,dy,dz)] = bondNotAllowed;
+    nStars = numPEG; //number of Stars
+    nMonomersPerStarArm = numPEGArm; //number OfMonomersPerStarArm
+    nCrosslinker = numCL; //number of Crosslinker
+
+    std::cout << "NumPEG on GPU: " << nStars << std::endl;
+    std::cout << "NumPEGArmlength on GPU: " << nMonomersPerStarArm << std::endl;
+    std::cout << "NumCrosslinker on GPU: " << nCrosslinker << std::endl;
+
+    //if (nMonomersPerStarArm != 29)
+        //throw std::runtime_error("nMonomersPerStarArm should be 29!!! Exiting...\n");
+
+    //if ((nMonomersPerStarArm%2) != 1)
+        //    throw std::runtime_error("nMonomersPerStarArm should be an odd number!!! Exiting...\n");
+
 }
 
-void UpdaterGPUScBFM_AB_Type::setConnectivity(uint32_t monoidx1, uint32_t monoidx2){
+void UpdaterGPUScBFM_AB_Type::setConnectivity(uint32_t monoidx1, uint32_t monoidx2)
+{
+    monosNNidx[monoidx1]->bondsMonomerIdx[monosNNidx[monoidx1]->size] = monoidx2;
+    //monosNNidx[monoidx2]->bondsMonomerIdx[monosNNidx[monoidx2]->size] = monoidx1;
 
-		monosNNidx[monoidx1]->bondsMonomerIdx[monosNNidx[monoidx1]->size] = monoidx2;
-		//monosNNidx[monoidx2]->bondsMonomerIdx[monosNNidx[monoidx2]->size] = monoidx1;
+    monosNNidx[monoidx1]->size++;
+    //monosNNidx[monoidx2]->size++;
 
-		monosNNidx[monoidx1]->size++;
-		//monosNNidx[monoidx2]->size++;
-
-		//if((monosNNidx[monoidx1]->size > MAX_CONNECTIVITY) || (monosNNidx[monoidx2]->size > MAX_CONNECTIVITY))
-		if((monosNNidx[monoidx1]->size > MAX_CONNECTIVITY))
-		{
-			throw std::runtime_error("MAX_CONNECTIVITY  exceeded!!! Exiting...\n");
-		}
+    //if((monosNNidx[monoidx1]->size > MAX_CONNECTIVITY) || (monosNNidx[monoidx2]->size > MAX_CONNECTIVITY))
+    if ( monosNNidx[monoidx1]->size > MAX_CONNECTIVITY )
+        throw std::runtime_error("MAX_CONNECTIVITY  exceeded!!! Exiting...\n");
 }
 
-void UpdaterGPUScBFM_AB_Type::setLatticeSize(uint32_t boxX, uint32_t boxY, uint32_t boxZ){
+void UpdaterGPUScBFM_AB_Type::setLatticeSize
+(
+    uint32_t const boxX,
+    uint32_t const boxY,
+    uint32_t const boxZ
+)
+{
+    Box_X = boxX;
+    Box_Y = boxY;
+    Box_Z = boxZ;
 
-	Box_X = boxX;
-	Box_Y = boxY;
-	Box_Z = boxZ;
+    Box_XM1 = boxX-1;
+    Box_YM1 = boxY-1;
+    Box_ZM1 = boxZ-1;
 
-	Box_XM1 = boxX-1;
-	Box_YM1 = boxY-1;
-	Box_ZM1 = boxZ-1;
+    // determine the shift values for first multiplication
+    uint32_t resultshift = -1;
+    uint32_t dummy = boxX;
+    while ( dummy != 0 )
+    {
+        dummy >>= 1;
+        resultshift++;
+    }
+    Box_XPRO=resultshift;
 
-	// determine the shift values for first multiplication
-	uint32_t resultshift = -1;
-	uint32_t dummy = boxX;
-	while (dummy != 0) {
-		dummy >>= 1;
-		resultshift++;
-	}
-	Box_XPRO=resultshift;
+    // determine the shift values for first multiplication
+    resultshift = -1;
+    dummy = boxX*boxY;
+    while ( dummy != 0 )
+    {
+        dummy >>= 1;
+        resultshift++;
+    }
+    Box_PROXY=resultshift;
 
-	// determine the shift values for first multiplication
-	resultshift = -1;
-	dummy = boxX*boxY;
-	while (dummy != 0) {
-		dummy >>= 1;
-		resultshift++;
-	}
-	Box_PROXY=resultshift;
+    std::cout << "use bit shift for boxX: (1 << "<< Box_XPRO << " ) = " << (1 << Box_XPRO) << " = " << (boxX) << std::endl;
+    std::cout << "use bit shift for boxX*boxY: (1 << "<< Box_PROXY << " ) = " << (1 << Box_PROXY) << " = " << (boxX*boxY) << std::endl;
 
-	std::cout << "use bit shift for boxX: (1 << "<< Box_XPRO << " ) = " << (1 << Box_XPRO) << " = " << (boxX) << std::endl;
-	std::cout << "use bit shift for boxX*boxY: (1 << "<< Box_PROXY << " ) = " << (1 << Box_PROXY) << " = " << (boxX*boxY) << std::endl;
+    // check if shift is correct
+    if ( (boxX != (1 << Box_XPRO)) || ((boxX*boxY) != (1 << Box_PROXY)) )
+        throw  std::runtime_error( "Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n" );
 
-	// check if shift is correct
-	if ( (boxX != (1 << Box_XPRO)) || ((boxX*boxY) != (1 << Box_PROXY)) )
-	{
-		throw  std::runtime_error("Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n");
-	}
+    //init lattice
+    mLattice = new uint8_t[Box_X*Box_Y*Box_Z];
 
-	//init lattice
-	Lattice = new uint8_t[Box_X*Box_Y*Box_Z];
-
-	for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
-		Lattice[i]=0;
+    for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
+        mLattice[i]=0;
 }
 
 void UpdaterGPUScBFM_AB_Type::populateLattice()
 {
-	//if(!GPUScBFM.StartSimulationGPU())
-	for (int idx = 0; idx < NrOfAllMonomers; idx++) {
-		Lattice[(PolymerSystem[3*idx  ]&Box_XM1) + ((PolymerSystem[3*idx+1] &Box_YM1) << Box_XPRO) + ((PolymerSystem[3*idx+2]&Box_ZM1) << Box_PROXY)] = 1;
-	}
+    //if(!GPUScBFM.StartSimulationGPU())
+    for ( size_t i = 0; i < nAllMonomers; ++i )
+    {
+        mLattice[  ( mPolymerSystem[3*i+0] & Box_XM1) +
+                 ( ( mPolymerSystem[3*i+1] & Box_YM1 ) << Box_XPRO ) +
+                 ( ( mPolymerSystem[3*i+2] & Box_ZM1 ) << Box_PROXY) ] = 1;
+    }
 }
 
 void UpdaterGPUScBFM_AB_Type::checkSystem()
 {
-	std::cout << "checkSystem" << std::endl;
+    std::cout << "checkSystem" << std::endl;
 
+    int countermLatticeStart = 0;
 
-	int counterLatticeStart = 0;
+        //if(!GPUScBFM.StartSimulationGPU())
+    for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
+        mLattice[i]=0;
 
-		//if(!GPUScBFM.StartSimulationGPU())
-	for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
-		Lattice[i]=0;
+    for (int idxMono=0; idxMono < (nAllMonomers); idxMono++)
+    {
+        int32_t xpos = mPolymerSystem[3*idxMono    ];
+        int32_t ypos = mPolymerSystem[3*idxMono+1  ];
+        int32_t zpos = mPolymerSystem[3*idxMono+2  ];
 
-	for (int idxMono=0; idxMono < (NrOfAllMonomers); idxMono++)
-	{
-		int32_t xpos = PolymerSystem[3*idxMono    ];
-		int32_t ypos = PolymerSystem[3*idxMono+1  ];
-		int32_t zpos = PolymerSystem[3*idxMono+2  ];
+        mLattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
 
-		Lattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+        mLattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
 
-		Lattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-		Lattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
+    }
 
-	}
+    for (int x=0;x<Box_X;x++)
+    for (int y=0;y<Box_Y;y++)
+    for (int z=0;z<Box_Z;z++)
+    {
+       countermLatticeStart += (mLattice[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
+       //if (mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)] != 0)
+       //cout << x << " " << y << " " << z << "\t" <<  mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]<< endl;
 
-	for (int x=0;x<Box_X;x++)
-			for (int y=0;y<Box_Y;y++)
-				for (int z=0;z<Box_Z;z++)
-				 {
-					counterLatticeStart += (Lattice[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
-				    //if (Lattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)] != 0)
-				    //cout << x << " " << y << " " << z << "\t" <<  Lattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]<< endl;
+    }
+    //countermLatticeStart *=8;
 
-				 }
-	//counterLatticeStart *=8;
+    std::cout << "occupied lattice sites: " << countermLatticeStart << " of " << (nAllMonomers*8) << std::endl;
 
-    std::cout << "occupied lattice sites: " << counterLatticeStart << " of " << (NrOfAllMonomers*8) << std::endl;
-
-    if(counterLatticeStart != (NrOfAllMonomers*8))
-    	throw std::runtime_error("Lattice occupation is wrong!!! Exiting... \n");
+    if(countermLatticeStart != (nAllMonomers*8))
+        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
 
 
     std::cout << "check bonds" << std::endl;
 
-    for (int idxMono=0; idxMono < (NrOfAllMonomers); idxMono++)
-    	for(unsigned idxNN=0; idxNN < monosNNidx[idxMono]->size; idxNN++)
-    	{
-    		 int32_t bond_x = (PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ]-PolymerSystem[3*idxMono  ]);
-    		 int32_t bond_y = (PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]-PolymerSystem[3*idxMono+1]);
-    		 int32_t bond_z = (PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2]-PolymerSystem[3*idxMono+2]);
+    for (int idxMono=0; idxMono < (nAllMonomers); idxMono++)
+    for(unsigned idxNN=0; idxNN < monosNNidx[idxMono]->size; idxNN++)
+    {
+         int32_t bond_x = (mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ]-mPolymerSystem[3*idxMono  ]);
+         int32_t bond_y = (mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]-mPolymerSystem[3*idxMono+1]);
+         int32_t bond_z = (mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2]-mPolymerSystem[3*idxMono+2]);
 
-    		 if((bond_x > 3) || (bond_x < -3))
-    		 {
-    			 std::cout << "Invalid XBond..."<< std::endl;
-    			 std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< PolymerSystem[3*idxMono  ] <<","<<PolymerSystem[3*idxMono+1]<<","<<PolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-    			 throw std::runtime_error("Invalid XBond!!! Exiting...\n");
-    		 }
+         if((bond_x > 3) || (bond_x < -3))
+         {
+             std::cout << "Invalid XBond..."<< std::endl;
+             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
+             throw std::runtime_error("Invalid XBond!!! Exiting...\n");
+         }
 
-    		 if((bond_y > 3) || (bond_y < -3))
-    		 {
-    			 std::cout << "Invalid YBond..."<< std::endl;
-    			 std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< PolymerSystem[3*idxMono  ] <<","<<PolymerSystem[3*idxMono+1]<<","<<PolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-    		     throw std::runtime_error("Invalid YBond!!! Exiting...\n");
+         if((bond_y > 3) || (bond_y < -3))
+         {
+             std::cout << "Invalid YBond..."<< std::endl;
+             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
+             throw std::runtime_error("Invalid YBond!!! Exiting...\n");
 
-    		 }
+         }
 
-    		 if((bond_z > 3) || (bond_z < -3))
-    		 {
-    			 std::cout << "Invalid ZBond..."<< std::endl;
-    			 std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< PolymerSystem[3*idxMono  ] <<","<<PolymerSystem[3*idxMono+1]<<","<<PolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-    		     throw std::runtime_error("Invalid ZBond!!! Exiting...\n");
-    		 }
-
-
-    		 //false--erlaubt; true-forbidden
-    		if( NotAllowedBondArray[IndexBondArray(bond_x, bond_y, bond_z)] )
-    		{
-    			std::cout << "something wrong with bonds between monomer: " << monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  << " and " << idxMono << std::endl;
-    			std::cout << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]) << "\t x: " << (PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]])   << "\t y:" << PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<< "\t z:" << PolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2]<< std::endl;
-    			std::cout << idxMono << "\t x:" << PolymerSystem[3*idxMono  ] << "\t y:" << PolymerSystem[3*idxMono+1]<< "\t z:" << PolymerSystem[3*idxMono  ]<< std::endl;
-
-    			throw std::runtime_error("Bond is NOT allowed!!! Exiting...\n");
-    		}
-
-    	}
+         if((bond_z > 3) || (bond_z < -3))
+         {
+             std::cout << "Invalid ZBond..."<< std::endl;
+             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
+             throw std::runtime_error("Invalid ZBond!!! Exiting...\n");
+         }
 
 
+         //false--erlaubt; true-forbidden
+        if( forbiddenBonds[IndexBondArray(bond_x, bond_y, bond_z)] )
+        {
+            std::cout << "something wrong with bonds between monomer: " << monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  << " and " << idxMono << std::endl;
+            std::cout << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]) << "\t x: " << (mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]])   << "\t y:" << mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<< "\t z:" << mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2]<< std::endl;
+            std::cout << idxMono << "\t x:" << mPolymerSystem[3*idxMono  ] << "\t y:" << mPolymerSystem[3*idxMono+1]<< "\t z:" << mPolymerSystem[3*idxMono  ]<< std::endl;
+
+            throw std::runtime_error("Bond is NOT allowed!!! Exiting...\n");
+        }
+
+    }
 }
 
-void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU(int32_t nrMCS){
+void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
+{
+    std::clock_t const t0 = std::clock();
 
-	//time information
-	time_t startTimer = time(NULL); //in seconds
-	time_t difference = 0;
-
-	//run simulation
-	for (int32_t timeS =1; timeS <= nrMCS;timeS++)
-	{
-		/******* OneMCS ******/
-		for(uint32_t cou = 0; cou < 2; cou++)
-		{
-
-		switch(randomNumbers.r250_rand32()%2) {
+    //run simulation
+    for ( int32_t timeS = 1; timeS <= nrMCS; ++timeS )
+    {
+        /******* OneMCS ******/
+        for(uint32_t cou = 0; cou < 2; cou++)
+        {
+            switch(randomNumbers.r250_rand32()%2) {
 
 
-			case 0:  // run Spezies_A monomers
-					runSimulationScBFMCheckSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(PolymerSystem_device, LatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
-				    runSimulationScBFMPerformSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(PolymerSystem_device, LatticeOut_device);
-				    runSimulationScBFMZeroArraySpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(PolymerSystem_device, LatticeTmp_device);
-				    break;
+                case 0:  // run Spezies_A monomers
+                        runSimulationScBFMCheckSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
+                        runSimulationScBFMPerformSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
+                        runSimulationScBFMZeroArraySpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
+                        break;
 
-			case 1: // run Spezies_B monomers
-					runSimulationScBFMCheckSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(PolymerSystem_device, LatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
-					runSimulationScBFMPerformSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(PolymerSystem_device, LatticeOut_device);
-					runSimulationScBFMZeroArraySpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(PolymerSystem_device, LatticeTmp_device);
+                case 1: // run Spezies_B monomers
+                        runSimulationScBFMCheckSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
+                        runSimulationScBFMPerformSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
+                        runSimulationScBFMZeroArraySpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
 
-					break;
+                        break;
 
-			default: break;
-		}
+                default: break;
+            }
+        }
 
-		}
+        /*
+        if ((timeS%saveTime==0))
+        {
+            //copy information from GPU to Host
 
-		/*
-		if ((timeS%saveTime==0))
-		{
-			//copy information from GPU to Host
+            //check the tmpmLattice
+            cout << "copy back mLatticeTmp_host: " << endl;
+            CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
-			//check the tmpLattice
-			cout << "copy back LatticeTmp_host: " << endl;
-			CUDA_CHECK(cudaMemcpy(LatticeTmp_host, LatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-			int dummyTmpCounter=0;
-			for (int x=0;x<LATTICE_X;x++)
-				for (int y=0;y<LATTICE_Y;y++)
-					for (int z=0;z<LATTICE_Z;z++)
-							 {
-								dummyTmpCounter += (LatticeTmp_host[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]==0)? 0 : 1;
-							 }
-			cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << endl;
+            int dummyTmpCounter=0;
+            for (int x=0;x<LATTICE_X;x++)
+                for (int y=0;y<LATTICE_Y;y++)
+                    for (int z=0;z<LATTICE_Z;z++)
+                             {
+                                dummyTmpCounter += (mLatticeTmp_host[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]==0)? 0 : 1;
+                             }
+            cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << endl;
 
 
 
-			CUDA_CHECK(cudaMemcpy(LatticeOut_host, LatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
-			for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-					Lattice[i]=0;
+            for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+                    mLattice[i]=0;
 
-			for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-				Lattice[i]=LatticeOut_host[i];
+            for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+                mLattice[i]=mLatticeOut_host[i];
 
-			if(dummyTmpCounter != 0)
-					exit(-1);
+            if(dummyTmpCounter != 0)
+                    exit(-1);
 
-			//start -z-order
-			//
-			//cout << "save -- recalculate Lattice: " << endl;
-			//fetch from device and check again
-			//	for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-			//	{
-			//		if(LatticeOut_host[i]==1)
-			//		{
-			//			uint32_t dummyhost = i;
-			//			uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
-			//			uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
-			//			uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
-			//			uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
-
-
-						//cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
-			//			Lattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
-						//
-			//		}
-					//
-			//	}
-				//end -z-order
-			//
+            //start -z-order
+            //
+            //cout << "save -- recalculate mLattice: " << endl;
+            //fetch from device and check again
+            //    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+            //    {
+            //        if(mLatticeOut_host[i]==1)
+            //        {
+            //            uint32_t dummyhost = i;
+            //            uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
+            //            uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
+            //            uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
+            //            uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
 
 
-			CUDA_CHECK(cudaMemcpy(PolymerSystem_host, PolymerSystem_device, (4*NrOfAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
-
-			for (uint32_t i=0; i<NrOfAllMonomers; i++)
-			{
-				PolymerSystem[3*i]=(int32_t) PolymerSystem_host[4*i];
-				PolymerSystem[3*i+1]=(int32_t) PolymerSystem_host[4*i+1];
-				PolymerSystem[3*i+2]=(int32_t) PolymerSystem_host[4*i+2];
-				//cout << i << "  : " << PolymerSystem_host[4*i+3] << endl;
-			}
-
-			checkSystem();
+                        //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
+            //            mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
+                        //
+            //        }
+                    //
+            //    }
+                //end -z-order
+            //
 
 
-		    SaveSystem(timeS);
-		    cout << "actual time: " << timeS << endl;
+            CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
 
-		    difference = time(NULL) - startTimer;
-		    cout << "mcs = " << (timeS+MCSTime)  << "  speed [performed monomer try and move/s] = MCS*N/t: " << (1.0 * timeS * ((1.0 * NrOfAllMonomers) / (1.0f * difference))) << "     runtime[s]:" << (1.0f * difference) << endl;
+            for (uint32_t i=0; i<nAllMonomers; i++)
+            {
+                mPolymerSystem[3*i]=(int32_t) mPolymerSystem_host[4*i];
+                mPolymerSystem[3*i+1]=(int32_t) mPolymerSystem_host[4*i+1];
+                mPolymerSystem[3*i+2]=(int32_t) mPolymerSystem_host[4*i+2];
+                //cout << i << "  : " << mPolymerSystem_host[4*i+3] << endl;
+            }
 
-
-		}
-		*/
-	}
-
-	//All MCS are done- copy back...
-
-
-		//copy information from GPU to Host
-
-		//check the tmpLattice
-		std::cout << "copy back LatticeTmp_host: " << std::endl;
-		CUDA_CHECK(cudaMemcpy(LatticeTmp_host, LatticeTmp_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-		int dummyTmpCounter=0;
-		for (int x=0;x<Box_X;x++)
-			for (int y=0;y<Box_Y;y++)
-				for (int z=0;z<Box_Z;z++)
-						 {
-							dummyTmpCounter += (LatticeTmp_host[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
-						 }
-		std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
+            checkSystem();
 
 
+            SaveSystem(timeS);
+            cout << "actual time: " << timeS << endl;
 
-		CUDA_CHECK(cudaMemcpy(LatticeOut_host, LatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-		for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
-				Lattice[i]=0;
-
-		for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
-			Lattice[i]=LatticeOut_host[i];
-
-		if(dummyTmpCounter != 0)
-			throw std::runtime_error("Lattice occupation is wrong!!! Exiting... \n");
-
-		//start -z-order
-		/*
-		cout << "save -- recalculate Lattice: " << endl;
-		//fetch from device and check again
-			for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-			{
-				if(LatticeOut_host[i]==1)
-				{
-					uint32_t dummyhost = i;
-					uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
-					uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
-					uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
-					uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
+            difference = time(NULL) - startTimer;
+            cout << "mcs = " << (timeS+MCSTime)  << "  speed [performed monomer try and move/s] = MCS*N/t: " << (1.0 * timeS * ((1.0 * nAllMonomers) / (1.0f * difference))) << "     runtime[s]:" << (1.0f * difference) << endl;
 
 
-					//cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
-					Lattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
+        }
+        */
+    }
 
-				}
-
-			}
-			//end -z-order
-		*/
+    //All MCS are done- copy back...
 
 
-		CUDA_CHECK(cudaMemcpy(PolymerSystem_host, PolymerSystem_device, (4*NrOfAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
+    //copy information from GPU to Host
 
-		for (uint32_t i=0; i<NrOfAllMonomers; i++)
-		{
-			PolymerSystem[3*i]=(int32_t) PolymerSystem_host[4*i];
-			PolymerSystem[3*i+1]=(int32_t) PolymerSystem_host[4*i+1];
-			PolymerSystem[3*i+2]=(int32_t) PolymerSystem_host[4*i+2];
-			//cout << i << "  : " << PolymerSystem_host[4*i+3] << endl;
-		}
+    //check the tmpmLattice
+    std::cout << "copy back mLatticeTmp_host: " << std::endl;
+    CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
-		checkSystem();
+    int dummyTmpCounter=0;
+    for ( int x = 0; x < Box_X; ++x )
+    for ( int y = 0; y < Box_Y; ++y )
+    for ( int z = 0; z < Box_Z; ++z )
+        dummyTmpCounter += (mLatticeTmp_host[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
+    std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
 
-	    std::cout << "run time (GPU): " << nrMCS << std::endl;
 
-	    difference = time(NULL) - startTimer;
-	    std::cout << "mcs = " << (nrMCS)  << "  speed [performed monomer try and move/s] = MCS*N/t: " << (1.0 * nrMCS * ((1.0 * NrOfAllMonomers) / (1.0f * difference))) << "     runtime[s]:" << (1.0f * difference) << std::endl;
+    CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
+    /* why set it to 0 if it will have values written to it right after that
+     * anyway ??? */
+    for ( int i = 0; i < Box_X * Box_Y * Box_Z; ++i )
+        mLattice[i] = 0;
+
+    for ( int i = 0; i < Box_X * Box_Y * Box_Z; ++i )
+        mLattice[i] = mLatticeOut_host[i];
+
+    if ( dummyTmpCounter != 0 )
+        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
+
+    //start -z-order
+    /*
+    cout << "save -- recalculate mLattice: " << endl;
+    //fetch from device and check again
+        for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+        {
+            if(mLatticeOut_host[i]==1)
+            {
+                uint32_t dummyhost = i;
+                uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
+                uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
+                uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
+                uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
+
+
+                //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
+                mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
+
+            }
+
+        }
+        //end -z-order
+    */
+
+
+    CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
+
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
+    {
+        mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
+        mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
+        mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
+    }
+
+    checkSystem();
+
+    std::clock_t const t1 = std::clock();
+    double const dt = float(t1-t0) / CLOCKS_PER_SEC;
+    std::cout
+    << "run time (GPU): " << nrMCS << "\n"
+    << "mcs = " << (nrMCS)  << "  speed [performed monomer try and move/s] = MCS*N/t: "
+    << nrMCS * ( nAllMonomers / dt )  << "     runtime[s]:" << dt << std::endl;
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX(uint32_t idx){
-	return PolymerSystem[3*idx];
-}
+void UpdaterGPUScBFM_AB_Type::cleanup()
+{
+    // copy information from GPU to Host
+    CUDA_CHECK( cudaMemcpy(mLattice, mLatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost) );
+    CUDA_CHECK( cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost) );
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY(uint32_t idx){
-	return PolymerSystem[3*idx+1];
-}
+    for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+        mPolymerSystem[3*i]=(int32_t) mPolymerSystem_host[4*i];
+        mPolymerSystem[3*i+1]=(int32_t) mPolymerSystem_host[4*i+1];
+        mPolymerSystem[3*i+2]=(int32_t) mPolymerSystem_host[4*i+2];
+    }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ(uint32_t idx){
-	return PolymerSystem[3*idx+2];
-}
+    checkSystem();
 
-bool UpdaterGPUScBFM_AB_Type::execute() {
-	return true;
-}
+    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
+    // copy connectivity matrix back from device to host
+    CUDA_CHECK( cudaMemcpy(MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost));
 
-void UpdaterGPUScBFM_AB_Type::cleanup() {
+    for (uint32_t i=0; i<nAllMonomers; i++)
+            {
 
+                //if(MonoInfo_host[i].size != monosNNidx[i]->size)
+                if(((mPolymerSystem_host[4*i+3]&224)>>5) != monosNNidx[i]->size)
+                {
+                    std::cout << "connectivity error after simulation run" << std::endl;
+                    std::cout << "mono:" << i << " vs " << (i) << std::endl;
+                    //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
+                    std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
 
+                    throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
+                }
 
+                for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
+                {
+                    if(MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u])
+                    {
+                        std::cout << "connectivity error after simulation run" << std::endl;
+                        std::cout << "mono:" << i << " vs " << (i) << std::endl;
 
-	//copy information from GPU to Host
-	CUDA_CHECK(cudaMemcpy(Lattice, LatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+                        std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
 
-	CUDA_CHECK(cudaMemcpy(PolymerSystem_host, PolymerSystem_device, (4*NrOfAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
+                        throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
+                    }
+                }
+            }
 
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-	{
-		PolymerSystem[3*i]=(int32_t) PolymerSystem_host[4*i];
-		PolymerSystem[3*i+1]=(int32_t) PolymerSystem_host[4*i+1];
-		PolymerSystem[3*i+2]=(int32_t) PolymerSystem_host[4*i+2];
-	}
-
-
-	checkSystem();
-
-	int sizeMonoInfo = NrOfAllMonomers * sizeof(MonoInfo);
-	// copy connectivity matrix back from device to host
-	CUDA_CHECK( cudaMemcpy(MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost));
-
-	for (uint32_t i=0; i<NrOfAllMonomers; i++)
-			{
-
-				//if(MonoInfo_host[i].size != monosNNidx[i]->size)
-				if(((PolymerSystem_host[4*i+3]&224)>>5) != monosNNidx[i]->size)
-				{
-					std::cout << "connectivity error after simulation run" << std::endl;
-					std::cout << "mono:" << i << " vs " << (i) << std::endl;
-					//cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
-					std::cout << "numElements:" << ((PolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
-
-					throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
-				}
-
-				for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
-				{
-					if(MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u])
-					{
-						std::cout << "connectivity error after simulation run" << std::endl;
-						std::cout << "mono:" << i << " vs " << (i) << std::endl;
-
-						std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
-
-						throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
-					}
-				}
-			}
-
-	std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
+    std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
 
-	checkSystem();
+    checkSystem();
 
-	//unbind texture reference to free resource
-	cudaUnbindTexture(texLatticeRefOut);
-	cudaUnbindTexture(texLatticeTmpRef);
-	cudaUnbindTexture(texPolymerAndMonomerIsEvenAndOnXRef);
-	cudaUnbindTexture(texMonomersSpezies_A_ThreadIdx);
-	cudaUnbindTexture(texMonomersSpezies_B_ThreadIdx);
+    //unbind texture reference to free resource
+    cudaUnbindTexture(texmLatticeRefOut);
+    cudaUnbindTexture(texmLatticeTmpRef);
+    cudaUnbindTexture(texPolymerAndMonomerIsEvenAndOnXRef);
+    cudaUnbindTexture(texMonomersSpezies_A_ThreadIdx);
+    cudaUnbindTexture(texMonomersSpezies_B_ThreadIdx);
 
-	//free memory on GPU
-	cudaFree(LatticeOut_device);
-	cudaFree(LatticeTmp_device);
+    //free memory on GPU
+    cudaFree(mLatticeOut_device);
+    cudaFree(mLatticeTmp_device);
 
-	cudaFree(PolymerSystem_device);
-	cudaFree(MonoInfo_device);
+    cudaFree(mPolymerSystem_device);
+    cudaFree(MonoInfo_device);
 
-	cudaFree(MonomersSpeziesIdx_A_device);
-	cudaFree(MonomersSpeziesIdx_B_device);
+    cudaFree(MonomersSpeziesIdx_A_device);
+    cudaFree(MonomersSpeziesIdx_B_device);
 
-	//free memory on CPU
-	free(PolymerSystem_host);
-	free(MonoInfo_host);
+    //free memory on CPU
+    free(mPolymerSystem_host);
+    free(MonoInfo_host);
 
-	free(LatticeOut_host);
-	free(LatticeTmp_host);
+    free(mLatticeOut_host);
+    free(mLatticeTmp_host);
 
-	free(MonomersSpeziesIdx_A_host);
-	free(MonomersSpeziesIdx_B_host);
+    free(MonomersSpeziesIdx_A_host);
+    free(MonomersSpeziesIdx_B_host);
 
 }
-
-
-/*inline bool UpdaterGPUScBFM_AB_Type::execute() {
-
-	return true;
-}
-
-
-inline void UpdaterGPUScBFM_AB_Type::cleanup() {
-}
-*/
