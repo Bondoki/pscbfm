@@ -6,6 +6,8 @@
 
 #include "./UpdaterGPUScBFM_AB_Type.h"
 
+#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
+
 
 /**
  * Why is this abstraction layer being used, isntead of just incorporating
@@ -95,7 +97,7 @@ public:
         mUpdaterGpu.populateLattice();
 
          // false-allowed; true-forbidden
-        std::cout << "[" << __FILE__ "] copy bondset" << std::endl;
+        std::cout << "[" << __FILENAME__ << "] copy bondset" << std::endl;
         /* maximum of (expected!!!) bond length in one dimension. Should be
          * queryable or there should be a better way to copy the bond set. */
         int const maxBondLength = 4;
@@ -107,7 +109,7 @@ public:
             mUpdaterGpu.copyBondSet( dx, dy, dz, ! mIngredients.getBondset().isValid( VectorInt3( dx, dy, dz ) ) );
         }
 
-        std::cout << "[" << __FILE__ "] initialize GPU updater" << std::endl;
+        std::cout << "[" << __FILENAME__ << "] initialize GPU updater" << std::endl;
         mUpdaterGpu.initialize( miGpuToUse );
     }
 
@@ -120,13 +122,13 @@ public:
     {
         std::clock_t const t0 = std::clock();
 
-        std::cout << "[" << __FILE__ "] MCS:" << mIngredients.getMolecules().getAge() << std::endl;
-        std::cout << "[" << __FILE__ "] start simulation on GPU" << std::endl;
+        std::cout << "[" << __FILENAME__ << "] MCS:" << mIngredients.getMolecules().getAge() << std::endl;
+        std::cout << "[" << __FILENAME__ << "] start simulation on GPU" << std::endl;
 
         mUpdaterGpu.runSimulationOnGPU( mnSteps );
 
         // copy back positions of all monomers
-        std::cout << "[" << __FILE__ "] copy back monomers from GPU updater to CPU 'molecules' to be used with analyzers" << std::endl;
+        std::cout << "[" << __FILENAME__ << "] copy back monomers from GPU updater to CPU 'molecules' to be used with analyzers" << std::endl;
         for( size_t i = 0; i < mIngredients.getMolecules().size(); ++i )
         {
             molecules[i].setAllCoordinates
@@ -146,9 +148,9 @@ public:
         double const amps = ( (double) mnSteps * mIngredients.getMolecules().size() )/ dt;
 
         std::cout
-        << "[" << __FILE__ "] mcs " << mIngredients.getMolecules().getAge()
+        << "[" << __FILENAME__ << "] mcs " << mIngredients.getMolecules().getAge()
         << " with " << amps << " [attempted moves/s]\n"
-        << "[" << __FILE__ "] mcs " << mIngredients.getMolecules().getAge()
+        << "[" << __FILENAME__ << "] mcs " << mIngredients.getMolecules().getAge()
         << " passed time " << dt << " [s] with " << mnSteps << " MCS "
         << std::endl;
 
@@ -157,7 +159,7 @@ public:
 
     inline void cleanup()
     {
-        std::cout << "[" << __FILE__ "] cleanup" << std::endl;
+        std::cout << "[" << __FILENAME__ << "] cleanup" << std::endl;
         mUpdaterGpu.cleanup();
     }
 };

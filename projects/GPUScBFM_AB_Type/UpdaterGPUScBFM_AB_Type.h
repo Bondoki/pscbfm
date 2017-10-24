@@ -17,13 +17,14 @@
 #include <LeMonADE/utility/RandomNumberGenerators.h>
 
 
+#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 
 #define CUDA_CHECK(cmd)                                                 \
 {                                                                       \
     cudaError_t error = cmd;                                            \
     if ( error != cudaSuccess )                                         \
     {                                                                   \
-        printf( "<%s>:%i ", __FILE__, __LINE__ );                       \
+        printf( "<%s>:%i ", __FILENAME__, __LINE__ );                       \
         printf( "[CUDA] Error: %s\n", cudaGetErrorString( error ) );    \
         exit(1);                                                        \
     }                                                                   \
@@ -62,7 +63,7 @@ class UpdaterGPUScBFM_AB_Type
 private:
     RandomNumberGenerators randomNumbers;
 
-    bool forbiddenBonds[512];
+    bool mForbiddenBonds[512];
     //int BondAsciiArray[512];
 
     uint32_t   nAllMonomers       ;
@@ -117,19 +118,10 @@ private:
 
 
     /**
-     * Packs the three given coordinates into 9 bits
+     * Packs the three given coordinates into 9 bits. Note that 2^9=512. This
+     * explains the forbiddenBonds table being 512 entries large!
      */
-    inline int IndexBondArray( int const x, int const y, int const z )
-    {
-        /* are these asserts correct, or is it ok to loose some information ??? */
-        assert( x & 7 == x );
-        assert( y & 7 == y );
-        assert( z & 7 == z );
-        /* 7 == 0b111, i.e. truncate the lowest 3 bits */
-        return   ( x & 7 ) +
-               ( ( y & 7 ) << 3 ) +
-               ( ( z & 7 ) << 6 );
-    }
+    int IndexBondArray( int const x, int const y, int const z );
 
     void checkSystem();
 
@@ -142,7 +134,7 @@ public:
     void cleanup();
 
     /* setter methods */
-    inline void copyBondSet( int dx, int dy, int dz, bool bondForbidden ){ forbiddenBonds[ IndexBondArray(dx,dy,dz) ] = bondForbidden; }
+    inline void copyBondSet( int dx, int dy, int dz, bool bondForbidden ){ mForbiddenBonds[ IndexBondArray(dx,dy,dz) ] = bondForbidden; }
     inline void setAttribute( uint32_t i, int32_t attribute ){ mAttributeSystem[i] = attribute; }
     void setNrOfAllMonomers( uint32_t nAllMonomers );
     void setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL );
