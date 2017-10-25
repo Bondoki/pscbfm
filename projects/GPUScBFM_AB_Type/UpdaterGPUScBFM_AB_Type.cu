@@ -34,42 +34,129 @@ __device__ __constant__ intCUDA DZTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5
 __device__ __constant__ uint32_t nMonomersSpeciesA_d;  // Nr of Monomer Species A
 __device__ __constant__ uint32_t nMonomersSpeciesB_d;  // Nr of Monomer Species B
 
-__device__ __constant__ uint32_t LATTICE_X_d;  // mLattice size in X
-__device__ __constant__ uint32_t LATTICE_Y_d;  // mLattice size in Y
-__device__ __constant__ uint32_t LATTICE_Z_d;  // mLattice size in Z
+__device__ __constant__ uint32_t LATTICE_X_d    ;  // mLattice size in X
+__device__ __constant__ uint32_t LATTICE_Y_d    ;  // mLattice size in Y
+__device__ __constant__ uint32_t LATTICE_Z_d    ;  // mLattice size in Z
+/* will this really bring performance improvement? At least constant cache
+ * might be as fast as register access when all threads in a warp access the
+ * the same constant */
+__device__ __constant__ uint32_t LATTICE_XM1_d  ;  // mLattice size in X-1
+__device__ __constant__ uint32_t LATTICE_YM1_d  ;  // mLattice size in Y-1
+__device__ __constant__ uint32_t LATTICE_ZM1_d  ;  // mLattice size in Z-1
 
-__device__ __constant__ uint32_t LATTICE_XM1_d;  // mLattice size in X-1
-__device__ __constant__ uint32_t LATTICE_YM1_d;  // mLattice size in Y-1
-__device__ __constant__ uint32_t LATTICE_ZM1_d;  // mLattice size in Z-1
-
-__device__ __constant__ uint32_t LATTICE_XPRO_d;  // mLattice shift in X
+__device__ __constant__ uint32_t LATTICE_XPRO_d ;  // mLattice shift in X
 __device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
 
-texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texmLatticeRefOut;
-texture<uint8_t, cudaTextureType1D, cudaReadModeElementType> texmLatticeTmpRef;
-
-texture<intCUDA, cudaTextureType1D, cudaReadModeElementType> texPolymerAndMonomerIsEvenAndOnXRef;
-
-texture<int32_t, cudaTextureType1D, cudaReadModeElementType> texMonomersSpezies_A_ThreadIdx;
-texture<int32_t, cudaTextureType1D, cudaReadModeElementType> texMonomersSpezies_B_ThreadIdx;
+texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeRefOut;
+texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeTmpRef;
+texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
+texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_A_ThreadIdx;
+texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_B_ThreadIdx;
 
 
 __device__ uint32_t hash(uint32_t a)
 {
-    /* magic numbers from R250 RNG? Link? */
-    a = ( a +0x7ed55d16 ) + ( a << 12 );
-    a = ( a ^0xc761c23c ) ^ ( a >> 19 );
-    a = ( a +0x165667b1 ) + ( a << 5  );
-    a = ( a +0xd3a2646c ) ^ ( a << 9  );
-    a = ( a +0xfd7046c5 ) + ( a << 3  );
-    a = ( a ^0xb55a4f09 ) ^ ( a >> 16 );
+    /* https://web.archive.org/web/20120626084524/http://www.concentric.net:80/~ttwang/tech/inthash.htm
+     * Note that before this 2007-03 version there were no magic numbers.
+     * This hash function doesn't seem to be published.
+     * He writes himself that this shouldn't really be used for PRNGs ???
+     * @todo E.g. check random distribution of randomly drawn directions are
+     *       they rouhgly even?
+     * The 'hash' or at least an older version of it can even be inverted !!!
+     * http://c42f.github.io/2015/09/21/inverting-32-bit-wang-hash.html
+     * Somehow this also gets attibuted to Robert Jenkins?
+     * https://gist.github.com/badboy/6267743
+     * -> http://www.burtleburtle.net/bob/hash/doobs.html
+     *    http://burtleburtle.net/bob/hash/integer.html
+     */
+    a = ( a + 0x7ed55d16 ) + ( a << 12 );
+    a = ( a ^ 0xc761c23c ) ^ ( a >> 19 );
+    a = ( a + 0x165667b1 ) + ( a << 5  );
+    a = ( a + 0xd3a2646c ) ^ ( a << 9  );
+    a = ( a + 0xfd7046c5 ) + ( a << 3  );
+    a = ( a ^ 0xb55a4f09 ) ^ ( a >> 16 );
     return a;
 }
 
-__device__ uintCUDA IdxBondArray_d(intCUDA x, intCUDA  y, intCUDA z) {
-    return ((x & 7) + ((y & 7) << 3) + ((z & 7) << 6));
+__device__ uintCUDA IdxBondArray_d
+(
+    intCUDA const x,
+    intCUDA const y,
+    intCUDA const z
+)
+{
+    return   ( x & 7 ) +
+           ( ( y & 7 ) << 3 ) +
+           ( ( z & 7 ) << 6 );
 }
 
+
+__device__ inline bool checkLattice
+(
+    intCUDA  const x0,
+    intCUDA  const y0,
+    intCUDA  const z0,
+    intCUDA  const dx,
+    intCUDA  const dy,
+    intCUDA  const dz,
+    uintCUDA const axis
+)
+{
+    uint8_t test = 0;
+    /* positions after movement */
+    uint32_t const x1 = ( x0 + dx + dx ) & LATTICE_XM1_d;
+    uint32_t const y1 = ( y0 + dy + dy ) & LATTICE_YM1_d;
+    uint32_t const z1 = ( z0 + dz + dz ) & LATTICE_ZM1_d;
+    uint32_t const xPosMonoAbs  = ( x0     ) & LATTICE_XM1_d;
+    uint32_t const xPosMonoPDX  = ( x0 + 1 ) & LATTICE_XM1_d;
+    uint32_t const xPosMonoMDX  = ( x0 - 1 ) & LATTICE_XM1_d;
+    uint32_t const yPosMonoAbs  = ( y0     ) & LATTICE_YM1_d;
+    uint32_t const yPosMonoPDY  = ( y0 + 1 ) & LATTICE_YM1_d;
+    uint32_t const yPosMonoMDY  = ( y0 - 1 ) & LATTICE_YM1_d;
+    uint32_t const zPosMonoAbs  = ( z0     ) & LATTICE_ZM1_d;
+    uint32_t const zPosMonoPDZ  = ( z0 + 1 ) & LATTICE_ZM1_d;
+    uint32_t const zPosMonoMDZ  = ( z0 - 1 ) & LATTICE_ZM1_d;
+
+    switch ( axis )
+    {
+        case 0: //-+x
+            test = tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) );
+            break;
+
+        case 1: //-+y
+            test = tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) );
+            break;
+
+        case 2: //-+z
+            test = tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) );
+            break;
+    }
+    return test;
+}
 
 __global__ void runSimulationScBFMCheckSpeziesA_gpu
 (
@@ -116,7 +203,7 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
             return;
         }
 #endif
-
+        /* ??? why 224 = 0xE0 = 0b1110 0000 */
         const unsigned nextNeigborSize = ( MonoProperty & 224 ) >> 5;
         for ( unsigned u = 0; u < nextNeigborSize; ++u )
         {
@@ -130,70 +217,14 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
         }
 
         //check the lattice
-        uint8_t test = 0;
-
-        uint32_t const xPosMonoDXDX = ( xPosMono + dx + dx ) & LATTICE_XM1_d;
-        uint32_t const yPosMonoDYDY = ( yPosMono + dy + dy ) & LATTICE_YM1_d;
-        uint32_t const zPosMonoDZDZ = ( zPosMono + dz + dz ) & LATTICE_ZM1_d;
-
-        uint32_t const xPosMonoAbs  = ( xPosMono     ) & LATTICE_XM1_d;
-        uint32_t const xPosMonoPDX  = ( xPosMono + 1 ) & LATTICE_XM1_d;
-        uint32_t const xPosMonoMDX  = ( xPosMono - 1 ) & LATTICE_XM1_d;
-
-        uint32_t const yPosMonoAbs  = ( yPosMono     ) & LATTICE_YM1_d;
-        uint32_t const yPosMonoPDY  = ( yPosMono + 1 ) & LATTICE_YM1_d;
-        uint32_t const yPosMonoMDY  = ( yPosMono - 1 ) & LATTICE_YM1_d;
-
-        uint32_t const zPosMonoAbs  = ( zPosMono     ) & LATTICE_ZM1_d;
-        uint32_t const zPosMonoPDZ  = ( zPosMono + 1 ) & LATTICE_ZM1_d;
-        uint32_t const zPosMonoMDZ  = ( zPosMono - 1 ) & LATTICE_ZM1_d;
-
-        switch ( random_int >> 1 )
-        {
-            case 0: //-+x
-                test = tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-                break;
-
-            case 1: //-+y
-                test = tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-                break;
-
-            case 2: //-+z
-                test = tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                       tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
-                break;
-        }
-        if ( test ) return;
+        if ( checkLattice( xPosMono, yPosMono, zPosMono, dx, dy, dz, random_int >> 1 ) )
+            return;
 
         // everything fits -> perform the move - add the information
         // possible move
+        /* ??? can I simply & LATTICE_XM1_d ? this looks like something like
+         * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
+         * is only possible if LATTICE_X_d is a power of two ... */
         mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
         mLatticeTmp_d[  ( ( xPosMono + dx ) & LATTICE_XM1_d ) +
                       ( ( ( yPosMono + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
