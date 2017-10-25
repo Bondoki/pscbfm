@@ -16,6 +16,7 @@
 
 #include "UpdaterGPUScBFM_AB_Type.h"
 
+#define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
 
 
 /* why 512??? Because 512==8^3 ??? but that would mean 8 possible values instead of
@@ -60,14 +61,18 @@ __device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
 texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeRefOut;
 texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeTmpRef;
 texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
-/* ??? what even is this? */
-//cudaTextureDesc texMonomersSpezies_A_ThreadIdx;
-//cudaTextureDesc texMonomersSpezies_B_ThreadIdx;
+/* These are arrays containing the monomer indices for the respective
+ * species (sorted ascending). E.g. for AABABBA this would be:
+ * texSpeciesIndicesA = { 0,1,3,6 }
+ * texSpeciesIndicesB = { 1,4,5 }
+ */
+cudaTextureObject_t texSpeciesIndicesA = 0;
+cudaTextureObject_t texSpeciesIndicesB = 0;
 texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_A_ThreadIdx;
 texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_B_ThreadIdx;
 
-uint32_t nMonomersSpezies_A_host;
-uint32_t nMonomersSpezies_B_host;
+uint32_t nMonomersSpeciesA;
+uint32_t nMonomersSpeciesB;
 
 __device__ uint32_t hash(uint32_t a)
 {
@@ -173,11 +178,27 @@ __device__ inline bool checkLattice
     return test;
 }
 
-__global__ void runSimulationScBFMCheckSpeziesA_gpu
+
+/**
+ * @param[in] rn a random number used as a kind of seed for the RNG
+ * @param[in] nMonomers number of max. monomers to work on, this is for
+ *            filtering out excessive threads and was prior a __constant__
+ *            But it is only used one(!) time in the kernel so the caching
+ *            of constant memory might not even be used.
+ *            @see https://web.archive.org/web/20140612185804/http://www.pixel.io/blog/2013/5/9/kernel-arguments-vs-__constant__-variables.html
+ *            -> Kernel arguments are even put into constant memory it seems:
+ *            @see "Section E.2.5.2 Function Parameters" in the "CUDA 5.5 C Programming Guide"
+ *            __global__ function parameters are passed to the device:
+ *             - via shared memory and are limited to 256 bytes on devices of compute capability 1.x,
+ *             - via constant memory and are limited to 4 KB on devices of compute capability 2.x and higher.
+ *            __device__ and __global__ functions cannot have a variable number of arguments.
+ */
+__global__ void kernelSimulationScBFMCheckSpezies
 (
     intCUDA  * const mPolymerSystem_d,
     uint8_t  * const mLatticeTmp_d   ,
     MonoInfo * const MonoInfo_d      ,
+    cudaTextureObject_t const texSpeciesIndices,
     uint32_t   const nMonomers       ,
     uint32_t   const rn
 )
@@ -193,7 +214,7 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
     if ( linId < nMonomers )
     {
         //select random monomer ??? I don't see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
-        uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,linId);
+        uint32_t const randomMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
 
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         uintCUDA const random_int = hash(hash(linId) ^ rn) % 6;
@@ -247,98 +268,6 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
                       ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
     }
 }
-
-/**
- * @param[in] rn a random number used as a kind of seed for the RNG
- * @param[in] nMonomers number of max. monomers to work on, this is for
- *            filtering out excessive threads and was prior a __constant__
- *            But it is only used one(!) time in the kernel so the caching
- *            of constant memory might not even be used.
- *            @see https://web.archive.org/web/20140612185804/http://www.pixel.io/blog/2013/5/9/kernel-arguments-vs-__constant__-variables.html
- *            -> Kernel arguments are even put into constant memory it seems:
- *            @see "Section E.2.5.2 Function Parameters" in the "CUDA 5.5 C Programming Guide"
- *            __global__ function parameters are passed to the device:
- *             - via shared memory and are limited to 256 bytes on devices of compute capability 1.x,
- *             - via constant memory and are limited to 4 KB on devices of compute capability 2.x and higher.
- *            __device__ and __global__ functions cannot have a variable number of arguments.
- */
-__global__ void runSimulationScBFMCheckSpeziesB_gpu
-(
-    intCUDA  * const mPolymerSystem_d,
-    uint8_t  * const mLatticeTmp_d   ,
-    MonoInfo * const MonoInfo_d      ,
-    uint32_t   const nMonomers       ,
-    uint32_t   const rn
-)
-{
-    int linId = blockIdx.x * blockDim.x + threadIdx.x;
-
-    /* might be more readable to just return if the thread is masked ???
-     * if ( ! ( idxA < nMonomersSpeciesA_d ) )
-     *     return;
-     * I think it only works on newer CUDA versions ??? else the whole warp
-     * might quit???
-     */
-    if ( linId < nMonomers )  /* (!) Difference */
-    {
-        //select random monomer ??? I donet see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
-        uint32_t const randomMonomer = tex1Dfetch( texMonomersSpezies_B_ThreadIdx, linId ); /* (!) Difference */
-
-        //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-        /* ??? ^ rn works and is sufficiently random ??? */
-        uintCUDA const random_int = hash( hash( linId ) ^ rn ) % 6;
-
-        intCUDA const x0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
-        intCUDA const y0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
-        intCUDA const z0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
-        intCUDA const MonoProperty = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
-
-         //select random direction. !!! That table is kinda magic. there might be a better way ... E.g. using bitmasking. Also, what is with 0 in one direction ??? There is no way to e.g. get (0,1,-1) ... ???
-         //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-        intCUDA const dx = DXTable_d[ random_int ];
-        intCUDA const dy = DYTable_d[ random_int ];
-        intCUDA const dz = DZTable_d[ random_int ];
-
-#ifdef NONPERIODICITY
-       /* check whether the new location of the particle would be inside the box
-        * if the box is not periodic, if not, then don't move the particle */
-        if ( ! ( 0 <= x0 + dx && x0 + dx < LATTICE_XM1_d &&
-                 0 <= y0 + dy && y0 + dy < LATTICE_YM1_d &&
-                 0 <= z0 + dz && z0 + dz < LATTICE_ZM1_d ) )
-        {
-            return;
-        }
-#endif
-        /* ??? why 224 = 0xE0 = 0b1110 0000 */
-        const unsigned nextNeigborSize = ( MonoProperty & 224 ) >> 5;
-        for ( unsigned u = 0; u < nextNeigborSize; ++u )
-        {
-            intCUDA const nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
-            intCUDA const nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
-            intCUDA const nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
-
-            //dpForbiddenBonds [512]; //false-allowed; true-forbidden
-            if ( dpForbiddenBonds[IdxBondArray_d(nN_X-x0-dx, nN_Y-y0-dy, nN_Z-z0-dz)] )
-                return;
-        }
-
-        //check the lattice
-        if ( checkLattice( x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
-            return;
-
-
-        // everything fits -> perform the move - add the information
-        // possible move
-        /* ??? can I simply & LATTICE_XM1_d ? this looks like something like
-         * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
-         * is only possible if LATTICE_X_d is a power of two ... */
-        mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
-        mLatticeTmp_d[  ( ( x0 + dx ) & LATTICE_XM1_d ) +
-                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
-    }
-}
-
 
 /**
  * !!! has many identical code parts as runSimulationScBFMCheckSpeziesA_gpu
@@ -773,97 +702,66 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     /***************************creating look-up for species*****************************************/
 
-    nMonomersSpezies_A_host = 0;
-    nMonomersSpezies_B_host = 0;
-
-    uint32_t *MonomersSpezies_host =(uint32_t *) malloc((nAllMonomers)*sizeof(uint32_t));
-
+    /* count monomers per species before allocating per species arrays */
+    uint32_t * pMonomerSpecies = (uint32_t *) malloc( nAllMonomers * sizeof(uint32_t) );
+    nMonomersSpeciesA = 0;
+    nMonomersSpeciesB = 0;
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        // monomer is odd or even
+        // monomer is odd or even / A or B
         if ( mAttributeSystem[i] == 1 )
         {
-            MonomersSpezies_host[i]=1;
-            //mPolymerSystem_host[4*i+3]=0;
-            //nMonomersSpezies_A_host++;
+            nMonomersSpeciesA++;
+            pMonomerSpecies[i] = 1;
         }
-        if ( mAttributeSystem[i] == 2 )
+        else if ( mAttributeSystem[i] == 2 )
         {
-            MonomersSpezies_host[i] = 2;
+            nMonomersSpeciesB++;
+            pMonomerSpecies[i] = 2;
         }
-        if ( mAttributeSystem[i] == 0 )
+        else
             throw std::runtime_error( "wrong attributes!!! Exiting... \n" );
     }
+    std::cout << "nMonomersSpezies_A: " << nMonomersSpeciesA << std::endl;
+    std::cout << "nMonomersSpezies_B: " << nMonomersSpeciesB << std::endl;
+    if ( nMonomersSpeciesA + nMonomersSpeciesB != nAllMonomers )
+        throw std::runtime_error( "Nr Of MonomerSpezies does not add up! Exiting... \n");
 
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    MonomersSpeziesIdx_A_host = (uint32_t *) malloc( nMonomersSpeciesA * sizeof(uint32_t) );
+    MonomersSpeziesIdx_B_host = (uint32_t *) malloc( nMonomersSpeciesB * sizeof(uint32_t) );
+
+    /* sort monomers (their indices) into corresponding species array  */
+    uint32_t nMonomersWrittenA = 0;
+    uint32_t nMonomersWrittenB = 0;
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //monomer is odd or even (A or B ???)
-        if ( MonomersSpezies_host[i] == 1 )
-            nMonomersSpezies_A_host++;
-        if ( MonomersSpezies_host[i] == 2 )
-            nMonomersSpezies_B_host++;
+        if ( pMonomerSpecies[i] == 1 )
+            MonomersSpeziesIdx_A_host[ nMonomersWrittenA++ ] = i;
+        else if ( pMonomerSpecies[i] == 2 )
+            MonomersSpeziesIdx_B_host[ nMonomersWrittenB++ ] = i;
     }
+    if ( nMonomersSpeciesA != nMonomersWrittenA )
+        throw std::runtime_error( "Number of monomers copeid for species A does not add up! Exiting... \n" );
+    if ( nMonomersSpeciesB != nMonomersWrittenB )
+        throw std::runtime_error( "Number of monomers copeid for species B does not add up! Exiting... \n" );
 
-    std::cout << "nMonomersSpezies_A: " << nMonomersSpezies_A_host << std::endl;
-    std::cout << "nMonomersSpezies_B: " << nMonomersSpezies_B_host << std::endl;
-
-    if((nMonomersSpezies_A_host+nMonomersSpezies_B_host) != nAllMonomers)
-    {
-        throw std::runtime_error("Nr Of MonomerSpezies doesn´t met!!! Exiting... \n");
-    }
-
-    MonomersSpeziesIdx_A_host =(uint32_t *) malloc((nMonomersSpezies_A_host)*sizeof(uint32_t));
-    MonomersSpeziesIdx_B_host =(uint32_t *) malloc((nMonomersSpezies_B_host)*sizeof(uint32_t));
-
-    uint32_t nMonomersSpezies_A_host_dummy = 0;
-    uint32_t nMonomersSpezies_B_host_dummy = 0;
-
-    for (uint32_t i=0; i<nAllMonomers; i++)
-    {
-        //monomer is odd or even
-
-        if( MonomersSpezies_host[i]==1)
-        //else
-        {
-            MonomersSpeziesIdx_A_host[nMonomersSpezies_A_host_dummy]=i;
-            //mPolymerSystem_host[4*i+3]=0;
-            nMonomersSpezies_A_host_dummy++;
-        }
-
-        if( MonomersSpezies_host[i]==2)
-        {
-            MonomersSpeziesIdx_B_host[nMonomersSpezies_B_host_dummy]=i;
-            //mPolymerSystem_host[4*i+3]=32;
-            nMonomersSpezies_B_host_dummy++;
-        }
-    }
-
-    if ( nMonomersSpezies_A_host != nMonomersSpezies_A_host_dummy )
-        throw std::runtime_error("Nr Of MonomerSpezies_A_host doesn´t met!!! Exiting... \n");
-    if ( nMonomersSpezies_B_host != nMonomersSpezies_B_host_dummy )
-        throw std::runtime_error("Nr Of MonomerSpezies_B_host doesn´t met!!! Exiting... \n");
-
-    std::cout << "create Look-Up-Thread-Table with size A: " << (nMonomersSpezies_A_host)*sizeof(uint32_t) << " bytes = " << ((nMonomersSpezies_A_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
-    std::cout << "create Look-Up-Thread-Table with size B: " << (nMonomersSpezies_B_host)*sizeof(uint32_t) << " bytes = " << ((nMonomersSpezies_B_host)*sizeof(uint32_t)/1024.0) << " kB "<< std::endl;
-
-    CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_A_device, (nMonomersSpezies_A_host)*sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc((void **) &MonomersSpeziesIdx_B_device, (nMonomersSpezies_B_host)*sizeof(uint32_t)));
-
-    std::cout << "copy Look-Up-Thread-Table with to GPU"<< std::endl;
-    CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpezies_A_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpezies_B_host)*sizeof(uint32_t), cudaMemcpyHostToDevice));
-
-    numblocksSpecies_A = (nMonomersSpezies_A_host-1)/NUMTHREADS+1;
-    std::cout << "calculate numBlocks Spezies A using" << (numblocksSpecies_A*NUMTHREADS) << "  needed: " << (nMonomersSpezies_A_host) <<  std::endl;
-
-    numblocksSpecies_B = (nMonomersSpezies_B_host-1)/NUMTHREADS+1;
-    std::cout << "calcluate numBlocks Spezies B using" << (numblocksSpecies_B*NUMTHREADS) << "  needed: " << (nMonomersSpezies_B_host) <<  std::endl;
+    /* move species tables to GPU */
+    CUDA_CHECK( cudaMalloc((void **) &MonomersSpeziesIdx_A_device, (nMonomersSpeciesA)*sizeof(uint32_t)) );
+    CUDA_CHECK( cudaMalloc((void **) &MonomersSpeziesIdx_B_device, (nMonomersSpeciesB)*sizeof(uint32_t)) );
+    CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpeciesA)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
+    CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpeciesB)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
 
     //make constant:
-    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesA_d, &nMonomersSpezies_A_host, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesB_d, &nMonomersSpezies_B_host, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesA_d, &nMonomersSpeciesA, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesB_d, &nMonomersSpeciesB, sizeof(uint32_t)));
 
     /************************end: creating look-up for species*****************************************/
+
+    /* calculate kernel config */
+    numblocksSpecies_A = (nMonomersSpeciesA-1)/NUMTHREADS+1;
+    std::cout << "calculate numBlocks Spezies A using" << (numblocksSpecies_A*NUMTHREADS) << "  needed: " << (nMonomersSpeciesA) <<  std::endl;
+    numblocksSpecies_B = (nMonomersSpeciesB-1)/NUMTHREADS+1;
+    std::cout << "calcluate numBlocks Spezies B using" << (numblocksSpecies_B*NUMTHREADS) << "  needed: " << (nMonomersSpeciesB) <<  std::endl;
 
     /****************************copy monomer informations ********************************************/
 
@@ -897,26 +795,26 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK(  cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo));   // Allocate array of structure on device
 
 
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
+    {
+        //MonoInfo_host[i].size = monosNNidx[i]->size;
+        if((monosNNidx[i]->size) > 7)
         {
-            //MonoInfo_host[i].size = monosNNidx[i]->size;
-            if((monosNNidx[i]->size) > 7)
-            {
-                std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
-                throw std::runtime_error("Limit of connectivity on GPU reached!!! Exiting... \n");
-            }
-
-            mPolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
-            //cout << "mono:" << i << " vs " << (i) << endl;
-            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
-
-            for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
-            {
-                MonoInfo_host[i].bondsMonomerIdx[u] = monosNNidx[i]->bondsMonomerIdx[u];
-
-                //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
-            }
+            std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
+            throw std::runtime_error("Limit of connectivity on GPU reached!!! Exiting... \n");
         }
+
+        mPolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
+        //cout << "mono:" << i << " vs " << (i) << endl;
+        //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
+
+        for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
+        {
+            MonoInfo_host[i].bondsMonomerIdx[u] = monosNNidx[i]->bondsMonomerIdx[u];
+
+            //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
+        }
+    }
 
     // copy to connectivity to device
     CUDA_CHECK( cudaMemcpy(MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice));
@@ -1061,14 +959,31 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     std::cout << "bind textures "  << std::endl;
     //bind texture reference with linear memory
     cudaBindTexture(0,texmLatticeRefOut,mLatticeOut_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
-
     cudaBindTexture(0,texmLatticeTmpRef,mLatticeTmp_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
-
     cudaBindTexture(0,texPolymerAndMonomerIsEvenAndOnXRef,mPolymerSystem_device,(4*nAllMonomers+1)*sizeof(intCUDA));
+    cudaBindTexture(0,texMonomersSpezies_A_ThreadIdx,MonomersSpeziesIdx_A_device,(nMonomersSpeciesA)*sizeof(uint32_t));
+    cudaBindTexture(0,texMonomersSpezies_B_ThreadIdx,MonomersSpeziesIdx_B_device,(nMonomersSpeciesB)*sizeof(uint32_t));
 
+    /* new with texture object... they said it would be easier -.- */
+    cudaResourceDesc resDescA;
+    memset( &resDescA, 0, sizeof( resDescA ) );
+    resDescA.resType                = cudaResourceTypeLinear;
+    resDescA.res.linear.desc.f      = cudaChannelFormatKindUnsigned;
+    resDescA.res.linear.desc.x      = 32; // bits per channel
+    cudaResourceDesc resDescB = resDescA;
+    resDescA.res.linear.devPtr      = MonomersSpeziesIdx_A_device;
+    resDescA.res.linear.sizeInBytes = nMonomersSpeciesA * sizeof( uint32_t );
+    resDescB.res.linear.devPtr      = MonomersSpeziesIdx_B_device;
+    resDescB.res.linear.sizeInBytes = nMonomersSpeciesB * sizeof( uint32_t );
 
-    cudaBindTexture(0,texMonomersSpezies_A_ThreadIdx,MonomersSpeziesIdx_A_device,(nMonomersSpezies_A_host)*sizeof(uint32_t));
-    cudaBindTexture(0,texMonomersSpezies_B_ThreadIdx,MonomersSpeziesIdx_B_device,(nMonomersSpezies_B_host)*sizeof(uint32_t));
+    cudaTextureDesc texDescA;
+    memset( &texDescA, 0, sizeof( texDescA ) );
+    texDescA.readMode = cudaReadModeElementType;
+    cudaTextureDesc texDescB = texDescA;
+
+    cudaCreateTextureObject( &texSpeciesIndicesA, &resDescA, &texDescA, NULL );
+    cudaCreateTextureObject( &texSpeciesIndicesB, &resDescB, &texDescB, NULL );
+
 
     /*************************end: bind textures on GPU ************************************************/
 
@@ -1359,13 +1274,13 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
             switch(randomNumbers.r250_rand32()%2)
             {
                 case 0:  // run Spezies_A monomers
-                        runSimulationScBFMCheckSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, nMonomersSpezies_A_host, randomNumbers.r250_rand32());
+                        kernelSimulationScBFMCheckSpezies<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, texSpeciesIndicesA, nMonomersSpeciesA, randomNumbers.r250_rand32());
                         runSimulationScBFMPerformSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
                         runSimulationScBFMZeroArraySpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
                         break;
 
                 case 1: // run Spezies_B monomers
-                        runSimulationScBFMCheckSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, nMonomersSpezies_B_host, randomNumbers.r250_rand32());
+                        kernelSimulationScBFMCheckSpezies<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, texSpeciesIndicesB, nMonomersSpeciesB, randomNumbers.r250_rand32());
                         runSimulationScBFMPerformSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
                         runSimulationScBFMZeroArraySpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
                         break;
@@ -1548,32 +1463,32 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     CUDA_CHECK( cudaMemcpy(MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost));
 
     for (uint32_t i=0; i<nAllMonomers; i++)
+    {
+
+        //if(MonoInfo_host[i].size != monosNNidx[i]->size)
+        if(((mPolymerSystem_host[4*i+3]&224)>>5) != monosNNidx[i]->size)
+        {
+            std::cout << "connectivity error after simulation run" << std::endl;
+            std::cout << "mono:" << i << " vs " << (i) << std::endl;
+            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
+            std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
+
+            throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
+        }
+
+        for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
+        {
+            if(MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u])
             {
+                std::cout << "connectivity error after simulation run" << std::endl;
+                std::cout << "mono:" << i << " vs " << (i) << std::endl;
 
-                //if(MonoInfo_host[i].size != monosNNidx[i]->size)
-                if(((mPolymerSystem_host[4*i+3]&224)>>5) != monosNNidx[i]->size)
-                {
-                    std::cout << "connectivity error after simulation run" << std::endl;
-                    std::cout << "mono:" << i << " vs " << (i) << std::endl;
-                    //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
-                    std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
+                std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
 
-                    throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
-                }
-
-                for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
-                {
-                    if(MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u])
-                    {
-                        std::cout << "connectivity error after simulation run" << std::endl;
-                        std::cout << "mono:" << i << " vs " << (i) << std::endl;
-
-                        std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
-
-                        throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
-                    }
-                }
+                throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
             }
+        }
+    }
 
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
@@ -1581,11 +1496,16 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     checkSystem();
 
     //unbind texture reference to free resource
-    cudaUnbindTexture(texmLatticeRefOut);
-    cudaUnbindTexture(texmLatticeTmpRef);
-    cudaUnbindTexture(texPolymerAndMonomerIsEvenAndOnXRef);
-    cudaUnbindTexture(texMonomersSpezies_A_ThreadIdx);
-    cudaUnbindTexture(texMonomersSpezies_B_ThreadIdx);
+    cudaUnbindTexture( texmLatticeRefOut                   );
+    cudaUnbindTexture( texmLatticeTmpRef                   );
+    cudaUnbindTexture( texPolymerAndMonomerIsEvenAndOnXRef );
+    cudaUnbindTexture( texMonomersSpezies_A_ThreadIdx      );
+    cudaUnbindTexture( texMonomersSpezies_B_ThreadIdx      );
+
+    cudaDestroyTextureObject( texSpeciesIndicesA );
+    cudaDestroyTextureObject( texSpeciesIndicesB );
+    texSpeciesIndicesA = 0;
+    texSpeciesIndicesB = 0;
 
     //free memory on GPU
     cudaFree(mLatticeOut_device);
