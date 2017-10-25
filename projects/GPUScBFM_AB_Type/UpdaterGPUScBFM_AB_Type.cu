@@ -47,12 +47,27 @@ __device__ __constant__ uint32_t LATTICE_ZM1_d  ;  // mLattice size in Z-1
 __device__ __constant__ uint32_t LATTICE_XPRO_d ;  // mLattice shift in X
 __device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
 
+/* Since CUDA 5.5 (~2014) there do exist texture objects which are much
+ * easier and can actually be used as kernel arguments!
+ * @see https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-kepler-texture-objects-improve-performance-and-flexibility/
+ * "What is not commonly known is that each outstanding texture reference that
+ *  is bound when a kernel is launched incurs added launch latency—up to 0.5 μs
+ *  per texture reference. This launch overhead persists even if the outstanding
+ *  bound textures are not even referenced by the kernel. Again, using texture
+ *  objects instead of texture references completely removes this overhead."
+ * -> wow !!!
+ */
 texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeRefOut;
 texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeTmpRef;
 texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
+/* ??? what even is this? */
+//cudaTextureDesc texMonomersSpezies_A_ThreadIdx;
+//cudaTextureDesc texMonomersSpezies_B_ThreadIdx;
 texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_A_ThreadIdx;
 texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_B_ThreadIdx;
 
+uint32_t nMonomersSpezies_A_host;
+uint32_t nMonomersSpezies_B_host;
 
 __device__ uint32_t hash(uint32_t a)
 {
@@ -103,56 +118,56 @@ __device__ inline bool checkLattice
 )
 {
     uint8_t test = 0;
-    /* positions after movement */
+    /* positions after movement. Why 2 times dx ??? */
     uint32_t const x1 = ( x0 + dx + dx ) & LATTICE_XM1_d;
     uint32_t const y1 = ( y0 + dy + dy ) & LATTICE_YM1_d;
     uint32_t const z1 = ( z0 + dz + dz ) & LATTICE_ZM1_d;
-    uint32_t const xPosMonoAbs  = ( x0     ) & LATTICE_XM1_d;
-    uint32_t const xPosMonoPDX  = ( x0 + 1 ) & LATTICE_XM1_d;
-    uint32_t const xPosMonoMDX  = ( x0 - 1 ) & LATTICE_XM1_d;
-    uint32_t const yPosMonoAbs  = ( y0     ) & LATTICE_YM1_d;
-    uint32_t const yPosMonoPDY  = ( y0 + 1 ) & LATTICE_YM1_d;
-    uint32_t const yPosMonoMDY  = ( y0 - 1 ) & LATTICE_YM1_d;
-    uint32_t const zPosMonoAbs  = ( z0     ) & LATTICE_ZM1_d;
-    uint32_t const zPosMonoPDZ  = ( z0 + 1 ) & LATTICE_ZM1_d;
-    uint32_t const zPosMonoMDZ  = ( z0 - 1 ) & LATTICE_ZM1_d;
+    uint32_t const x0Abs  = ( x0     ) & LATTICE_XM1_d;
+    uint32_t const x0PDX  = ( x0 + 1 ) & LATTICE_XM1_d;
+    uint32_t const x0MDX  = ( x0 - 1 ) & LATTICE_XM1_d;
+    uint32_t const y0Abs  = ( y0     ) & LATTICE_YM1_d;
+    uint32_t const y0PDY  = ( y0 + 1 ) & LATTICE_YM1_d;
+    uint32_t const y0MDY  = ( y0 - 1 ) & LATTICE_YM1_d;
+    uint32_t const z0Abs  = ( z0     ) & LATTICE_ZM1_d;
+    uint32_t const z0PDZ  = ( z0 + 1 ) & LATTICE_ZM1_d;
+    uint32_t const z0MDZ  = ( z0 - 1 ) & LATTICE_ZM1_d;
 
     switch ( axis )
     {
         case 0: //-+x
-            test = tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, x1 + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) );
+            test = tex1Dfetch( texmLatticeRefOut, x1 + (y0Abs << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0PDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0MDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0Abs << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0Abs << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0MDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0PDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0MDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x1 + (y0PDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) );
             break;
 
         case 1: //-+y
-            test = tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (y1 << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d ) );
+            test = tex1Dfetch( texmLatticeRefOut, x0MDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0MDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0MDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) );
             break;
 
         case 2: //-+z
-            test = tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch( texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) );
+            test = tex1Dfetch( texmLatticeRefOut, x0MDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0MDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0MDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0Abs + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
+                   tex1Dfetch( texmLatticeRefOut, x0PDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) );
             break;
     }
     return test;
@@ -163,28 +178,29 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
     intCUDA  * const mPolymerSystem_d,
     uint8_t  * const mLatticeTmp_d   ,
     MonoInfo * const MonoInfo_d      ,
+    uint32_t   const nMonomers       ,
     uint32_t   const rn
 )
 {
-    int idxA = blockIdx.x * blockDim.x + threadIdx.x;
+    int linId = blockIdx.x * blockDim.x + threadIdx.x;
 
     /* might be more readable to just return if the thread is masked ???
-     * if ( ! ( idxA < nMonomersSpeciesA_d ) )
+     * if ( ! ( linId < nMonomersSpeciesA_d ) )
      *     return;
      * I think it only works on newer CUDA versions ??? else the whole warp
      * might quit???
      */
-    if ( idxA < nMonomersSpeciesA_d )
+    if ( linId < nMonomers )
     {
-        //select random monomer ??? I donet see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
-        uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
+        //select random monomer ??? I don't see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
+        uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,linId);
 
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-        uintCUDA const random_int = hash(hash(idxA) ^ rn) % 6;
+        uintCUDA const random_int = hash(hash(linId) ^ rn) % 6;
 
-        intCUDA const xPosMono     = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
-        intCUDA const yPosMono     = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
-        intCUDA const zPosMono     = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
+        intCUDA const x0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
+        intCUDA const y0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
+        intCUDA const z0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
         intCUDA const MonoProperty = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
 
          //select random direction. !!! That table is kinda magic. there might be a better way ... E.g. using bitmasking. Also, what is with 0 in one direction ??? There is no way to e.g. get (0,1,-1) ... ???
@@ -196,9 +212,9 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
 #ifdef NONPERIODICITY
        /* check whether the new location of the particle would be inside the box
         * if the box is not periodic, if not, then don't move the particle */
-        if ( ! ( 0 <= xPosMono + dx && xPosMono + dx < LATTICE_XM1_d &&
-                 0 <= yPosMono + dy && yPosMono + dy < LATTICE_YM1_d &&
-                 0 <= zPosMono + dz && zPosMono + dz < LATTICE_ZM1_d ) )
+        if ( ! ( 0 <= x0 + dx && x0 + dx < LATTICE_XM1_d &&
+                 0 <= y0 + dy && y0 + dy < LATTICE_YM1_d &&
+                 0 <= z0 + dz && z0 + dz < LATTICE_ZM1_d ) )
         {
             return;
         }
@@ -212,12 +228,12 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
             intCUDA const nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
 
             //dpForbiddenBonds [512]; //false-allowed; true-forbidden
-            if ( dpForbiddenBonds[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
+            if ( dpForbiddenBonds[IdxBondArray_d(nN_X-x0-dx, nN_Y-y0-dy, nN_Z-z0-dz)] )
                 return;
         }
 
         //check the lattice
-        if ( checkLattice( xPosMono, yPosMono, zPosMono, dx, dy, dz, random_int >> 1 ) )
+        if ( checkLattice( x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
             return;
 
         // everything fits -> perform the move - add the information
@@ -226,9 +242,100 @@ __global__ void runSimulationScBFMCheckSpeziesA_gpu
          * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
          * is only possible if LATTICE_X_d is a power of two ... */
         mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
-        mLatticeTmp_d[  ( ( xPosMono + dx ) & LATTICE_XM1_d ) +
-                      ( ( ( yPosMono + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( ( zPosMono + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
+        mLatticeTmp_d[  ( ( x0 + dx ) & LATTICE_XM1_d ) +
+                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
+    }
+}
+
+/**
+ * @param[in] rn a random number used as a kind of seed for the RNG
+ * @param[in] nMonomers number of max. monomers to work on, this is for
+ *            filtering out excessive threads and was prior a __constant__
+ *            But it is only used one(!) time in the kernel so the caching
+ *            of constant memory might not even be used.
+ *            @see https://web.archive.org/web/20140612185804/http://www.pixel.io/blog/2013/5/9/kernel-arguments-vs-__constant__-variables.html
+ *            -> Kernel arguments are even put into constant memory it seems:
+ *            @see "Section E.2.5.2 Function Parameters" in the "CUDA 5.5 C Programming Guide"
+ *            __global__ function parameters are passed to the device:
+ *             - via shared memory and are limited to 256 bytes on devices of compute capability 1.x,
+ *             - via constant memory and are limited to 4 KB on devices of compute capability 2.x and higher.
+ *            __device__ and __global__ functions cannot have a variable number of arguments.
+ */
+__global__ void runSimulationScBFMCheckSpeziesB_gpu
+(
+    intCUDA  * const mPolymerSystem_d,
+    uint8_t  * const mLatticeTmp_d   ,
+    MonoInfo * const MonoInfo_d      ,
+    uint32_t   const nMonomers       ,
+    uint32_t   const rn
+)
+{
+    int linId = blockIdx.x * blockDim.x + threadIdx.x;
+
+    /* might be more readable to just return if the thread is masked ???
+     * if ( ! ( idxA < nMonomersSpeciesA_d ) )
+     *     return;
+     * I think it only works on newer CUDA versions ??? else the whole warp
+     * might quit???
+     */
+    if ( linId < nMonomers )  /* (!) Difference */
+    {
+        //select random monomer ??? I donet see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
+        uint32_t const randomMonomer = tex1Dfetch( texMonomersSpezies_B_ThreadIdx, linId ); /* (!) Difference */
+
+        //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
+        /* ??? ^ rn works and is sufficiently random ??? */
+        uintCUDA const random_int = hash( hash( linId ) ^ rn ) % 6;
+
+        intCUDA const x0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
+        intCUDA const y0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
+        intCUDA const z0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
+        intCUDA const MonoProperty = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
+
+         //select random direction. !!! That table is kinda magic. there might be a better way ... E.g. using bitmasking. Also, what is with 0 in one direction ??? There is no way to e.g. get (0,1,-1) ... ???
+         //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+        intCUDA const dx = DXTable_d[ random_int ];
+        intCUDA const dy = DYTable_d[ random_int ];
+        intCUDA const dz = DZTable_d[ random_int ];
+
+#ifdef NONPERIODICITY
+       /* check whether the new location of the particle would be inside the box
+        * if the box is not periodic, if not, then don't move the particle */
+        if ( ! ( 0 <= x0 + dx && x0 + dx < LATTICE_XM1_d &&
+                 0 <= y0 + dy && y0 + dy < LATTICE_YM1_d &&
+                 0 <= z0 + dz && z0 + dz < LATTICE_ZM1_d ) )
+        {
+            return;
+        }
+#endif
+        /* ??? why 224 = 0xE0 = 0b1110 0000 */
+        const unsigned nextNeigborSize = ( MonoProperty & 224 ) >> 5;
+        for ( unsigned u = 0; u < nextNeigborSize; ++u )
+        {
+            intCUDA const nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
+            intCUDA const nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
+            intCUDA const nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
+
+            //dpForbiddenBonds [512]; //false-allowed; true-forbidden
+            if ( dpForbiddenBonds[IdxBondArray_d(nN_X-x0-dx, nN_Y-y0-dy, nN_Z-z0-dz)] )
+                return;
+        }
+
+        //check the lattice
+        if ( checkLattice( x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
+            return;
+
+
+        // everything fits -> perform the move - add the information
+        // possible move
+        /* ??? can I simply & LATTICE_XM1_d ? this looks like something like
+         * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
+         * is only possible if LATTICE_X_d is a power of two ... */
+        mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
+        mLatticeTmp_d[  ( ( x0 + dx ) & LATTICE_XM1_d ) +
+                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
     }
 }
 
@@ -243,8 +350,7 @@ __global__ void runSimulationScBFMPerformSpeziesA_gpu
 )
 {
     int const idxA = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if(idxA < nMonomersSpeciesA_d)
+    if ( idxA < nMonomersSpeciesA_d )
     {
         //select random monomer. Again why is this random ... ???
         uint32_t const randomMonomer = tex1Dfetch( texMonomersSpezies_A_ThreadIdx, idxA );
@@ -252,9 +358,9 @@ __global__ void runSimulationScBFMPerformSpeziesA_gpu
 
         if ( MonoProperty & 1 != 0 )    // possible move
         {
-            intCUDA const xPosMono = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+0 );
-            intCUDA const yPosMono = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1 );
-            intCUDA const zPosMono = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2 );
+            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+0 );
+            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1 );
+            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2 );
 
             //select random direction
             uintCUDA const random_int = (MonoProperty&28)>>2;
@@ -274,67 +380,55 @@ __global__ void runSimulationScBFMPerformSpeziesA_gpu
             //check the lattice
             uint8_t test = 0;
 
-            uint32_t const xPosMonoDXDX = ( xPosMono + dx + dx ) & LATTICE_XM1_d;
-            uint32_t const yPosMonoDYDY = ( yPosMono + dy + dy ) & LATTICE_YM1_d;
-            uint32_t const zPosMonoDZDZ = ( zPosMono + dz + dz ) & LATTICE_ZM1_d;
+            uint32_t const x1 = ( x0 + dx + dx ) & LATTICE_XM1_d;
+            uint32_t const y1 = ( y0 + dy + dy ) & LATTICE_YM1_d;
+            uint32_t const z1 = ( z0 + dz + dz ) & LATTICE_ZM1_d;
 
-            uint32_t const xPosMonoAbs  = ( xPosMono           ) & LATTICE_XM1_d;
-            uint32_t const xPosMonoPDX  = ( xPosMono + 1       ) & LATTICE_XM1_d;
-            uint32_t const xPosMonoMDX  = ( xPosMono - 1       ) & LATTICE_XM1_d;
+            uint32_t const x0Abs  = ( x0     ) & LATTICE_XM1_d;
+            uint32_t const x0PDX  = ( x0 + 1 ) & LATTICE_XM1_d;
+            uint32_t const x0MDX  = ( x0 - 1 ) & LATTICE_XM1_d;
+            uint32_t const y0Abs  = ( y0     ) & LATTICE_YM1_d;
+            uint32_t const y0PDY  = ( y0 + 1 ) & LATTICE_YM1_d;
+            uint32_t const y0MDY  = ( y0 - 1 ) & LATTICE_YM1_d;
+            uint32_t const z0Abs  = ( z0     ) & LATTICE_ZM1_d;
+            uint32_t const z0PDZ  = ( z0 + 1 ) & LATTICE_ZM1_d;
+            uint32_t const z0MDZ  = ( z0 - 1 ) & LATTICE_ZM1_d;
 
-            uint32_t const yPosMonoAbs  = ( yPosMono           ) & LATTICE_YM1_d;
-            uint32_t const yPosMonoPDY  = ( yPosMono + 1       ) & LATTICE_YM1_d;
-            uint32_t const yPosMonoMDY  = ( yPosMono - 1       ) & LATTICE_YM1_d;
+            switch ( random_int >> 1 )
+            {
+                case 0: //-+x
+                    test = tex1Dfetch(texmLatticeTmpRef, x1 + (y0Abs << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0PDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0MDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0Abs << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0Abs << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0MDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0PDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0MDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x1 + (y0PDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) );
+                    break;
+                case 1: //-+y
+                    test = tex1Dfetch(texmLatticeTmpRef, x0MDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0MDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0MDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d) );
 
-            uint32_t const zPosMonoAbs  = ( zPosMono           ) & LATTICE_ZM1_d;
-            uint32_t const zPosMonoPDZ  = ( zPosMono + 1       ) & LATTICE_ZM1_d;
-            uint32_t const zPosMonoMDZ  = ( zPosMono - 1       ) & LATTICE_ZM1_d;
-
-            switch (random_int >> 1)
-              {
-              case 0: //-+x
-
-                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                              tex1Dfetch(texmLatticeTmpRef, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-
-                        break;
-
-              case 1: //-+y
-
-                  test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-
-                        break;
-
-              case 2: //-+z
-
-                    test =  tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                                tex1Dfetch(texmLatticeTmpRef, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeTmpRef, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
+                    break;
+                case 2: //-+z
+                    test = tex1Dfetch(texmLatticeTmpRef, x0MDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0MDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0MDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0Abs + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) ) |
+                           tex1Dfetch(texmLatticeTmpRef, x0PDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d) );
 
                         break;
 
@@ -344,14 +438,14 @@ __global__ void runSimulationScBFMPerformSpeziesA_gpu
 
 
           // everything fits -> perform the move - add the information
-            //mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-            //mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-            //mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+            //mPolymerSystem_d[4*randomMonomer  ] = x0 +dx;
+            //mPolymerSystem_d[4*randomMonomer+1] = y0 +dy;
+            //mPolymerSystem_d[4*randomMonomer+2] = z0 +dz;
             mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | 2; // indicating allowed move
-            mLattice_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
+            mLattice_d[((x0 + dx     )&LATTICE_XM1_d) + (((y0 + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
 
 
-            mLattice_d[xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d)]=0;
+            mLattice_d[x0Abs + (y0Abs << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d)]=0;
 
       }
 
@@ -373,9 +467,9 @@ __global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *mPolymerSystem_
 
       if(((MonoProperty&3) != 0))    //possible move
       {
-          intCUDA const xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-          intCUDA const yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-          intCUDA const zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+          intCUDA const x0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
+          intCUDA const y0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
+          intCUDA const z0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
 
           //select random direction
           uintCUDA const random_int = (MonoProperty&28)>>2;
@@ -389,20 +483,20 @@ __global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *mPolymerSystem_
           // possible move but not allowed
           if(((MonoProperty&3) == 1))
           {
-              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+              mLatticeTmp_d[((x0 + dx     )&LATTICE_XM1_d) + (((y0 + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
 
               mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
           }
           else //allowed move with all circumstance
           {
-              mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-              mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-              mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
+              mPolymerSystem_d[4*randomMonomer  ] = x0 +dx;
+              mPolymerSystem_d[4*randomMonomer+1] = y0 +dy;
+              mPolymerSystem_d[4*randomMonomer+2] = z0 +dz;
               mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
 
-              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+              mLatticeTmp_d[((x0 + dx     )&LATTICE_XM1_d) + (((y0 + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
 
-              //mLatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+              //mLatticeTmp_d[((x0      )&LATTICE_XM1_d) + (((y0      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
 
           }
           // everything fits -> perform the move - add the information
@@ -411,153 +505,6 @@ __global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *mPolymerSystem_
 
       }
 }
-
-
-__global__ void runSimulationScBFMCheckSpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d, MonoInfo *MonoInfo_d , const  uint32_t rn) {
-
-
-      int idxB=blockIdx.x*blockDim.x+threadIdx.x;
-
-
-      if(idxB < nMonomersSpeciesB_d)
-      {
-          //select random monomer
-          uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
-
-          //select random direction
-          uintCUDA const random_int = hash(hash(idxB) ^ rn) % 6;
-
-          intCUDA const xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-          intCUDA const yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-          intCUDA const zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-          intCUDA const MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
-
-          //select random direction
-          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-          intCUDA const dx = DXTable_d[random_int];
-          intCUDA const dy = DYTable_d[random_int];
-          intCUDA const dz = DZTable_d[random_int];
-          const unsigned nextNeigborSize = ((MonoProperty&224)>>5);
-
-#ifdef NONPERIODICITY
-
-         if((xPosMono + dx) < 0)
-             return;
-
-         if((xPosMono + dx) >= LATTICE_XM1_d)
-             return;
-
-         if((yPosMono + dy) < 0)
-             return;
-
-         if((yPosMono + dy) >= LATTICE_YM1_d)
-             return;
-
-         if((zPosMono + dz) < 0)
-             return;
-
-         if((zPosMono + dz) >= LATTICE_ZM1_d)
-             return;
-
-#endif
-
-         for(unsigned u=0; u < nextNeigborSize; u++)
-         {
-              intCUDA nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
-              intCUDA nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
-              intCUDA nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
-
-                         //dpForbiddenBonds [512]; //false-allowed; true-forbidden
-                         if( dpForbiddenBonds[IdxBondArray_d(nN_X-xPosMono-dx, nN_Y-yPosMono-dy, nN_Z-zPosMono-dz)] )
-                             return;
-
-         }
-
-        //check the lattice
-        uint8_t test = 0;
-
-        uint32_t const xPosMonoDXDX = ((xPosMono + dx + dx)&LATTICE_XM1_d);
-        uint32_t const yPosMonoDYDY = ((yPosMono + dy + dy)&LATTICE_YM1_d);
-        uint32_t const zPosMonoDZDZ = ((zPosMono + dz + dz)&LATTICE_ZM1_d);
-
-        uint32_t const xPosMonoAbs = ((xPosMono          )&LATTICE_XM1_d);
-        uint32_t const xPosMonoPDX = ((xPosMono + 1      )&LATTICE_XM1_d);
-        uint32_t const xPosMonoMDX = ((xPosMono - 1      )&LATTICE_XM1_d);
-
-        uint32_t const yPosMonoAbs = ((yPosMono          )&LATTICE_YM1_d);
-        uint32_t const yPosMonoPDY = ((yPosMono + 1      )&LATTICE_YM1_d);
-        uint32_t const yPosMonoMDY = ((yPosMono - 1      )&LATTICE_YM1_d);
-
-        uint32_t const zPosMonoAbs = ((zPosMono          )&LATTICE_ZM1_d);
-        uint32_t const zPosMonoPDZ = ((zPosMono + 1      )&LATTICE_ZM1_d);
-        uint32_t const zPosMonoMDZ = ((zPosMono - 1      )&LATTICE_ZM1_d);
-
-        switch (random_int >> 1)
-        {
-         case 0: //-+x
-                  test =  tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoDXDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-                    break;
-
-          case 1: //-+y
-
-              test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoMDZ << LATTICE_PROXY_d) ) |
-
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoAbs << LATTICE_PROXY_d) ) |
-
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoDYDY << LATTICE_XPRO_d) + (zPosMonoPDZ << LATTICE_PROXY_d) );
-
-                    break;
-
-          case 2: //-+z
-
-                test =  tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoMDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoAbs << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoMDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                            tex1Dfetch(texmLatticeRefOut, xPosMonoAbs + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) ) |
-                        tex1Dfetch(texmLatticeRefOut, xPosMonoPDX + (yPosMonoPDY << LATTICE_XPRO_d) + (zPosMonoDZDZ << LATTICE_PROXY_d) );
-
-                    break;
-
-        }
-
-        if (test) return;
-
-
-          // everything fits -> perform the move - add the information
-              // possible move
-          mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
-
-          mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=1;
-
-
-
-
-
-
-
-
-      }
-    }
 
 
 __global__ void runSimulationScBFMPerformSpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLattice_d) {
@@ -826,92 +773,34 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     /***************************creating look-up for species*****************************************/
 
-    uint32_t nMonomersSpezies_A_host = 0;
-    uint32_t nMonomersSpezies_B_host = 0;
+    nMonomersSpezies_A_host = 0;
+    nMonomersSpezies_B_host = 0;
 
     uint32_t *MonomersSpezies_host =(uint32_t *) malloc((nAllMonomers)*sizeof(uint32_t));
 
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //monomer is odd or even
-
-        if(mAttributeSystem[i] == 1)
+        // monomer is odd or even
+        if ( mAttributeSystem[i] == 1 )
         {
             MonomersSpezies_host[i]=1;
             //mPolymerSystem_host[4*i+3]=0;
             //nMonomersSpezies_A_host++;
         }
-        if(mAttributeSystem[i] == 2)
+        if ( mAttributeSystem[i] == 2 )
         {
-            MonomersSpezies_host[i]=2;
-
+            MonomersSpezies_host[i] = 2;
         }
-        if(mAttributeSystem[i] == 0)
-        {
-            throw std::runtime_error("wrong attributes!!! Exiting... \n");
-        }
+        if ( mAttributeSystem[i] == 0 )
+            throw std::runtime_error( "wrong attributes!!! Exiting... \n" );
     }
-
-/*
-    // nMonomersPerStarArm is an odd number
-    uint32_t NStar = 4*nMonomersPerStarArm+1;
-
-    for (uint32_t st=0; st<nStars; st++)
-    {
-        //Center
-        MonomersSpezies_host[st*NStar     ]=1;
-
-        //first arm
-        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
-        {
-            uint32_t tag = (onarm%2)+1;
-            MonomersSpezies_host[st*NStar + onarm ]=tag;
-        }
-
-        //second arm
-        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
-        {
-            uint32_t tag = (onarm%2)+1;
-            MonomersSpezies_host[st*NStar + nMonomersPerStarArm + onarm ]=tag;
-        }
-
-        //third arm
-        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
-        {
-            uint32_t tag = (onarm%2)+1;
-            MonomersSpezies_host[st*NStar + 2*nMonomersPerStarArm + onarm ]=tag;
-        }
-
-        //quad arm
-        for(uint32_t onarm=1; onarm <= nMonomersPerStarArm; onarm++)
-        {
-            uint32_t tag = (onarm%2)+1;
-            MonomersSpezies_host[st*NStar + 3*nMonomersPerStarArm + onarm ]=tag;
-        }
-
-     }
-
-    //uint32_t offset = (NStar*nStars);
-    //
-    //for (uint32_t i=0; i<nCrosslinker; i++)
-    //{
-    //    MonomersSpezies_host[offset + i]=1;
-    //}
-
-    //for olympic the additional monomers behave as cross-linker
-    for (uint32_t i=(NStar*nStars); i<nAllMonomers; i++)
-        MonomersSpezies_host[i]=1;
-
-*/
 
     for (uint32_t i=0; i<nAllMonomers; i++)
     {
-        //monomer is odd or even
-
-        if( MonomersSpezies_host[i]==1)
+        //monomer is odd or even (A or B ???)
+        if ( MonomersSpezies_host[i] == 1 )
             nMonomersSpezies_A_host++;
-
-        if( MonomersSpezies_host[i]==2)
+        if ( MonomersSpezies_host[i] == 2 )
             nMonomersSpezies_B_host++;
     }
 
@@ -1467,20 +1356,18 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
         /******* OneMCS ******/
         for(uint32_t cou = 0; cou < 2; cou++)
         {
-            switch(randomNumbers.r250_rand32()%2) {
-
-
+            switch(randomNumbers.r250_rand32()%2)
+            {
                 case 0:  // run Spezies_A monomers
-                        runSimulationScBFMCheckSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
+                        runSimulationScBFMCheckSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, nMonomersSpezies_A_host, randomNumbers.r250_rand32());
                         runSimulationScBFMPerformSpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
                         runSimulationScBFMZeroArraySpeziesA_gpu<<<numblocksSpecies_A,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
                         break;
 
                 case 1: // run Spezies_B monomers
-                        runSimulationScBFMCheckSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, randomNumbers.r250_rand32());
+                        runSimulationScBFMCheckSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device, MonoInfo_device, nMonomersSpezies_B_host, randomNumbers.r250_rand32());
                         runSimulationScBFMPerformSpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeOut_device);
                         runSimulationScBFMZeroArraySpeziesB_gpu<<<numblocksSpecies_B,NUMTHREADS>>>(mPolymerSystem_device, mLatticeTmp_device);
-
                         break;
 
                 default: break;
