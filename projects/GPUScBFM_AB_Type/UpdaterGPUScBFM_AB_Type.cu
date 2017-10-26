@@ -8,6 +8,7 @@
 
 #include <cstdio>                           // printf
 #include <cstdlib>                          // exit
+#include <cstring>                          // memset
 #include <ctime>
 #include <iostream>
 #include <stdexcept>
@@ -21,23 +22,19 @@
 
 /* why 512??? Because 512==8^3 ??? but that would mean 8 possible values instead of
  * -4 to +4 which I saw being used ... */
-__device__ __constant__ bool dpForbiddenBonds [512]; //false-allowed; true-forbidden
+__device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbidden
 
-/* ??? meaning
- * DXTable_d = { -1,1,0,0,0,0 }
- * DYTable_d = { 0,0,-1,1,0,0 }
- * DZTable_d = { 0,0,0,0,-1,1 }
+/**
+ * These will be initialized to:
+ *   DXTable_d = { -1,1,0,0,0,0 }
+ *   DYTable_d = { 0,0,-1,1,0,0 }
+ *   DZTable_d = { 0,0,0,0,-1,1 }
+ * I.e. a table of three random directional 3D vectors \vec{dr} = (dx,dy,dz)
  */
-__device__ __constant__ intCUDA DXTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ intCUDA DYTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ intCUDA DZTable_d [6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ intCUDA DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ intCUDA DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ intCUDA DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 
-__device__ __constant__ uint32_t nMonomersSpeciesA_d;  // Nr of Monomer Species A
-__device__ __constant__ uint32_t nMonomersSpeciesB_d;  // Nr of Monomer Species B
-
-__device__ __constant__ uint32_t LATTICE_X_d    ;  // mLattice size in X
-__device__ __constant__ uint32_t LATTICE_Y_d    ;  // mLattice size in Y
-__device__ __constant__ uint32_t LATTICE_Z_d    ;  // mLattice size in Z
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
@@ -58,25 +55,35 @@ __device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
  *  objects instead of texture references completely removes this overhead."
  * -> wow !!!
  */
+/**
+ * Contains the particles as well as a property tag for each:
+ *   [ x0, y0, z0, p0, x1, y1, z1, p1, ... ]
+ * The propertie tags p are bit packed:
+ *                        8  7  6  5  4  3  2  1  0
+ * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * | unused |  |  |  |  |c |   nnr  |  dir   |move |
+ * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *  c   ... charged: 0 no, 1: yes
+ *  nnr ... number of neighbors, this will get populated from LeMonADE's
+ *          get get
+ */
+texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
+
 cudaTextureObject_t texLatticeRefOut = 0;
 cudaTextureObject_t texLatticeTmpRef = 0;
-texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeRefOut;
-texture< uint8_t, cudaTextureType1D, cudaReadModeElementType > texmLatticeTmpRef;
-texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
-/* These are arrays containing the monomer indices for the respective
+
+/**
+ * These are arrays containing the monomer indices for the respective
  * species (sorted ascending). E.g. for AABABBA this would be:
  * texSpeciesIndicesA = { 0,1,3,6 }
  * texSpeciesIndicesB = { 1,4,5 }
  */
 cudaTextureObject_t texSpeciesIndicesA = 0;
 cudaTextureObject_t texSpeciesIndicesB = 0;
-texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_A_ThreadIdx;
-texture< int32_t, cudaTextureType1D, cudaReadModeElementType > texMonomersSpezies_B_ThreadIdx;
 
-uint32_t nMonomersSpeciesA;
-uint32_t nMonomersSpeciesB;
 
-__device__ uint32_t hash(uint32_t a)
+
+__device__ uint32_t hash( uint32_t a )
 {
     /* https://web.archive.org/web/20120626084524/http://www.concentric.net:80/~ttwang/tech/inthash.htm
      * Note that before this 2007-03 version there were no magic numbers.
@@ -111,7 +118,6 @@ __device__ uintCUDA IdxBondArray_d
            ( ( y & 7 ) << 3 ) +
            ( ( z & 7 ) << 6 );
 }
-
 
 __device__ inline bool checkLattice
 (
@@ -179,7 +185,6 @@ __device__ inline bool checkLattice
     return test;
 }
 
-
 /**
  * @param[in] rn a random number used as a kind of seed for the RNG
  * @param[in] nMonomers number of max. monomers to work on, this is for
@@ -197,7 +202,8 @@ __device__ inline bool checkLattice
  *       data, and check one condition and write out again. There isn't even
  *       a loop and most of the work seems to be boiler plate initialization
  *       code which could be cut if the kernels could be merged together.
- *       Why are there three kernels instead of just one ???
+ *       Why are there three kernels instead of just one
+ *        -> for global synchronization
  */
 __global__ void kernelSimulationScBFMCheckSpezies
 (
@@ -211,25 +217,25 @@ __global__ void kernelSimulationScBFMCheckSpezies
 )
 {
     int linId = blockIdx.x * blockDim.x + threadIdx.x;
-
     /* might be more readable to just return if the thread is masked ???
-     * if ( ! ( linId < nMonomersSpeciesA_d ) )
+     * if ( ! ( linId < nMonomers ) )
      *     return;
      * I think it only works on newer CUDA versions ??? else the whole warp
      * might quit???
      */
     if ( linId < nMonomers )
     {
-        //select random monomer ??? I don't see why this is random? Is texMonomersSpezies_A_ThreadIdx randomized?
-        uint32_t const randomMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+        // "select random monomer" ??? I don't see why this is random? texSpeciesIndices is not randomized!
+        uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+        /* isn't this basically an array of structs where a struct of arrays
+         * should be faster ??? */
+        intCUDA  const x0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
+        intCUDA  const y0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
+        intCUDA  const z0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
+        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
 
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         uintCUDA const random_int = hash( hash( linId ) ^ rn ) % 6;
-
-        intCUDA const x0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
-        intCUDA const y0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
-        intCUDA const z0           = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
-        intCUDA const MonoProperty = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
 
          //select random direction. !!! That table is kinda magic. there might be a better way ... E.g. using bitmasking. Also, what is with 0 in one direction ??? There is no way to e.g. get (0,1,-1) ... ???
          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
@@ -247,20 +253,16 @@ __global__ void kernelSimulationScBFMCheckSpezies
             return;
         }
 #endif
-        /* ??? why 224 = 0xE0 = 0b1110 0000 */
-        const unsigned nextNeigborSize = ( MonoProperty & 224 ) >> 5;
+        const unsigned nextNeigborSize = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
         for ( unsigned u = 0; u < nextNeigborSize; ++u )
         {
-            intCUDA const nN_X=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]  );
-            intCUDA const nN_Y=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+1);
-            intCUDA const nN_Z=tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*MonoInfo_d[randomMonomer].bondsMonomerIdx[u]+2);
-
-            //dpForbiddenBonds [512]; //false-allowed; true-forbidden
-            if ( dpForbiddenBonds[IdxBondArray_d(nN_X-x0-dx, nN_Y-y0-dy, nN_Z-z0-dz)] )
+            intCUDA const nN_X = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+0 );
+            intCUDA const nN_Y = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+1 );
+            intCUDA const nN_Z = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+2 );
+            if ( dpForbiddenBonds[ IdxBondArray_d( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
                 return;
         }
 
-        //check the lattice
         if ( checkLattice( texLatticeRefOut, x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
             return;
 
@@ -268,8 +270,8 @@ __global__ void kernelSimulationScBFMCheckSpezies
         // possible move
         /* ??? can I simply & LATTICE_XM1_d ? this looks like something like
          * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
-         * is only possible if LATTICE_X_d is a power of two ... */
-        mPolymerSystem_d[4*randomMonomer+3] = MonoProperty | ((random_int<<2)+1);
+         * is only possible if LATTICE_XM1_d+1 is a power of two ... */
+        mPolymerSystem_d[ 4*iMonomer+3 ] = properties | ((random_int<<2)+1);
         mLatticeTmp_d[  ( ( x0 + dx ) & LATTICE_XM1_d ) +
                       ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
                       ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
@@ -288,52 +290,36 @@ __global__ void kernelSimulationScBFMPerformSpecies
     int const linId = blockIdx.x * blockDim.x + threadIdx.x;
     if ( linId < nMonomers )
     {
-        //select random monomer. Again why is this random ... ???
-        uint32_t const randomMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
-        intCUDA  const MonoProperty  = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4 * randomMonomer + 3 );
-
-        if ( MonoProperty & 1 != 0 )    // possible move
+        uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
+        if ( properties & 1 != 0 )    // possible move
         {
-            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+0 );
-            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1 );
-            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2 );
+            intCUDA  const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
+            intCUDA  const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
+            intCUDA  const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
+            uintCUDA const random_int = ( properties & 28 ) >> 2; // 28 == 0b11100
 
-            //select random direction
-            uintCUDA const random_int = (MonoProperty&28)>>2;
-
-            //select random direction
-            //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-
-            /*
-            tmp_DXTable[0]=-1; tmp_DXTable[1]= 1; tmp_DXTable[2]= 0; tmp_DXTable[3]= 0; tmp_DXTable[4]= 0; tmp_DXTable[5]= 0;
-            tmp_DYTable[0]= 0; tmp_DYTable[1]= 0; tmp_DYTable[2]=-1; tmp_DYTable[3]= 1; tmp_DYTable[4]= 0; tmp_DYTable[5]= 0;
-            tmp_DZTable[0]= 0; tmp_DZTable[1]= 0; tmp_DZTable[2]= 0; tmp_DZTable[3]= 0; tmp_DZTable[4]=-1; tmp_DZTable[5]= 1;
-            */
             intCUDA const dx = DXTable_d[ random_int ];
             intCUDA const dy = DYTable_d[ random_int ];
             intCUDA const dz = DZTable_d[ random_int ];
 
-            //check the lattice
             if ( checkLattice( texLatticeTmpRef, x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
                 return;
 
             // everything fits -> perform the move - add the information
-            //mPolymerSystem_d[ 4*randomMonomer+0 ] = x0 +dx;
-            //mPolymerSystem_d[ 4*randomMonomer+1 ] = y0 +dy;
-            //mPolymerSystem_d[ 4*randomMonomer+2 ] = z0 +dz;
-            mPolymerSystem_d[ 4*randomMonomer+3 ] = MonoProperty | 2; // indicating allowed move
-            mLattice_d[ ( ( x0 + dx     ) & LATTICE_XM1_d ) +
-                      ( ( ( y0 + dy     ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( ( z0 + dz     ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
-
-            uint32_t const x0Abs  = x0 & LATTICE_XM1_d;
-            uint32_t const y0Abs  = y0 & LATTICE_YM1_d;
-            uint32_t const z0Abs  = z0 & LATTICE_ZM1_d;
-            mLattice_d[x0Abs + (y0Abs << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d)]=0;
+            //mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
+            //mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
+            //mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
+            mPolymerSystem_d[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
+            mLattice_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
+                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
+            mLattice_d[ ( x0 & LATTICE_XM1_d ) +
+                      ( ( y0 & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                      ( ( z0 & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
         }
     }
 }
-
 
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
@@ -346,17 +332,17 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     int linId = blockIdx.x * blockDim.x + threadIdx.x;
     if ( linId < nMonomers )
     {
-        uint32_t const randomMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
-        intCUDA  const MonoProperty  = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
+        uint32_t const iMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
 
-        if ( ( MonoProperty & 3 ) != 0 )    //possible move
+        if ( ( properties & 3 ) != 0 )    //possible move
         {
-            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
-            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
-            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
+            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
+            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
+            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
 
             //select random direction
-            uintCUDA const random_int = ( MonoProperty & 28 ) >> 2;
+            uintCUDA const random_int = ( properties & 28 ) >> 2;
 
             //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
             intCUDA const dx = DXTable_d[ random_int ];
@@ -364,19 +350,19 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
             intCUDA const dz = DZTable_d[ random_int ];
 
             // possible move but not allowed
-            if ( ( MonoProperty & 3 ) == 1 )
+            if ( ( properties & 3 ) == 1 )
             {
                 mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
                              ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
                              ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
-                mPolymerSystem_d[ 4*randomMonomer+3 ] = MonoProperty & MASK5BITS; // delete the first 5 bits
+                mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
             }
             else //allowed move with all circumstance
             {
-                mPolymerSystem_d[ 4*randomMonomer+0 ] = x0 + dx;
-                mPolymerSystem_d[ 4*randomMonomer+1 ] = y0 + dy;
-                mPolymerSystem_d[ 4*randomMonomer+2 ] = z0 + dz;
-                mPolymerSystem_d[ 4*randomMonomer+3 ] = MonoProperty & MASK5BITS; // delete the first 5 bits
+                mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
+                mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
+                mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
+                mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
 
                 mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
                              ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
@@ -384,7 +370,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
                 //mLatticeTmp_d[((x0      )&LATTICE_XM1_d) + (((y0      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
             }
             // everything fits -> perform the move - add the information
-            //  mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
+            //  mPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
         }
     }
 }
@@ -453,33 +439,34 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
 
     /**** create the BondTable and copy to constant memory ****/
-    std::cout << "copy BondTable: " << std::endl;
     bool * tmpForbiddenBonds = (bool *) malloc(sizeof(bool)*512);
     uint nAllowedBonds = 0;
     for(int i = 0; i < 512; i++)
     {
         tmpForbiddenBonds[i] = false;
         tmpForbiddenBonds[i] = mForbiddenBonds[i];
-        std::cout << "bond: " << i << "  " << tmpForbiddenBonds[i] << "  " << mForbiddenBonds[i] << std::endl;
         if ( ! tmpForbiddenBonds[i] )
             nAllowedBonds++;
     }
-    std::cout << "used bond in simulation: " << nAllowedBonds << " / 108 " << std::endl;
+    std::cout << "used bonds in simulation: " << nAllowedBonds << " / 108 " << std::endl;
     if ( nAllowedBonds != 108 )
-        throw std::runtime_error( "wrong bond-set! Expected 108 allowed bonds. Exiting...\n" );
+    {
+        std::stringstream msg;
+        msg << "Wrong bond-set! Expected 108 allowed bonds, but got " << nAllowedBonds << ". Exiting...\n";
+        throw std::runtime_error( msg.str() );
+    }
     CUDA_CHECK( cudaMemcpyToSymbol( dpForbiddenBonds, tmpForbiddenBonds, sizeof(bool)*512 ) );
     free(tmpForbiddenBonds);
 
-    //creating the displacement arrays
+    /* create a table mapping the random int to directions whereto move the
+     * monomers */
     std::cout << "copy DXYZTable: " << std::endl;
-
     intCUDA tmp_DXTable[6] = { -1,1,  0,0,  0,0 };
     intCUDA tmp_DYTable[6] = {  0,0, -1,1,  0,0 };
     intCUDA tmp_DZTable[6] = {  0,0,  0,0, -1,1 };
-
-    CUDA_CHECK(cudaMemcpyToSymbol(DXTable_d, tmp_DXTable, sizeof(intCUDA)*6));
-    CUDA_CHECK(cudaMemcpyToSymbol(DYTable_d, tmp_DYTable, sizeof(intCUDA)*6));
-    CUDA_CHECK(cudaMemcpyToSymbol(DZTable_d, tmp_DZTable, sizeof(intCUDA)*6));
+    CUDA_CHECK( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( intCUDA ) * 6 ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( intCUDA ) * 6 ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( intCUDA ) * 6 ) );
 
     /***************************creating look-up for species*****************************************/
 
@@ -532,42 +519,35 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpeciesA)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
     CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpeciesB)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
 
-    //make constant:
-    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesA_d, &nMonomersSpeciesA, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(nMonomersSpeciesB_d, &nMonomersSpeciesB, sizeof(uint32_t)));
-
     /************************end: creating look-up for species*****************************************/
 
     /* calculate kernel config */
+    /* ceilDiv better ? */
     numblocksSpecies_A = (nMonomersSpeciesA-1)/NUMTHREADS+1;
-    std::cout << "calculate numBlocks Spezies A using" << (numblocksSpecies_A*NUMTHREADS) << "  needed: " << (nMonomersSpeciesA) <<  std::endl;
     numblocksSpecies_B = (nMonomersSpeciesB-1)/NUMTHREADS+1;
-    std::cout << "calcluate numBlocks Spezies B using" << (numblocksSpecies_B*NUMTHREADS) << "  needed: " << (nMonomersSpeciesB) <<  std::endl;
 
     /****************************copy monomer informations ********************************************/
-
-
     mPolymerSystem_host =(intCUDA *) malloc((4*nAllMonomers+1)*sizeof(intCUDA));
-
     std::cout << "try to allocate : " << ((4*nAllMonomers+1)*sizeof(intCUDA)) << " bytes = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0)) << " kB = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0*1024.0)) << " MB coordinates on GPU " << std::endl;
 
-    CUDA_CHECK(cudaMalloc((void **) &mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA)));
-
-
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    /* copy [ x0,y0,z0, x1 ... ] -> [ x0,y0,z0,p0, x1 ...]. Might be
+     * an idea to use cudaMemcpy2D to transfer this strided array to GPU.
+     * At least for copying back the results, see below, but for this the
+     * property field actually will be set in the next few lines */
+    CUDA_CHECK( cudaMalloc( (void **) &mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) ) );
+    for ( uint32_t i =0; i < nAllMonomers; ++i )
     {
-        mPolymerSystem_host[4*i]=(intCUDA) mPolymerSystem[3*i];
-        mPolymerSystem_host[4*i+1]=(intCUDA) mPolymerSystem[3*i+1];
-        mPolymerSystem_host[4*i+2]=(intCUDA) mPolymerSystem[3*i+2];
-        mPolymerSystem_host[4*i+3]=0;
+        mPolymerSystem_host[ 4*i+0 ] = (intCUDA) mPolymerSystem[ 3*i+0 ];
+        mPolymerSystem_host[ 4*i+1 ] = (intCUDA) mPolymerSystem[ 3*i+1 ];
+        mPolymerSystem_host[ 4*i+2 ] = (intCUDA) mPolymerSystem[ 3*i+2 ];
+        mPolymerSystem_host[ 4*i+3 ] = 0;
     }
 
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
+    int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
 
-    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
-
-    std::cout << "size of strut MonoInfo: " << sizeof(MonoInfo) << " bytes = " << (sizeof(MonoInfo)/(1024.0)) <<  "kB for one monomer connectivity " << std::endl;
+    std::cout << "size of struct MonoInfo: " << sizeof(MonoInfo) << " bytes = " << (sizeof(MonoInfo)/(1024.0)) <<  "kB for one monomer connectivity " << std::endl;
 
     std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = " << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0)) <<  "MB for connectivity matrix on GPU " << std::endl;
 
@@ -582,7 +562,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
         if((monosNNidx[i]->size) > 7)
         {
             std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
-            throw std::runtime_error("Limit of connectivity on GPU reached!!! Exiting... \n");
+            throw std::runtime_error( "Limit of connectivity on GPU reached! Exiting...\n" );
         }
 
         mPolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
@@ -606,20 +586,14 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     /****************************creating lattice******************************************************/
 
-    uint32_t LATTICE_X = Box_X;
-    uint32_t LATTICE_Y = Box_Y;
-    uint32_t LATTICE_Z = Box_Z;
-
-    uint32_t LATTICE_XM1 = Box_XM1;
-    uint32_t LATTICE_YM1 = Box_YM1;
-    uint32_t LATTICE_ZM1 = Box_ZM1;
-
-    uint32_t LATTICE_XPRO = Box_XPRO;
-    uint32_t LATTICE_PROXY = Box_PROXY;
-
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_X_d, &LATTICE_X, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Y_d, &LATTICE_Y, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_Z_d, &LATTICE_Z, sizeof(uint32_t)));
+    uint32_t const LATTICE_X     = mBoxX    ;
+    uint32_t const LATTICE_Y     = mBoxY    ;
+    uint32_t const LATTICE_Z     = mBoxZ    ;
+    uint32_t const LATTICE_XM1   = mBoxXM1  ;
+    uint32_t const LATTICE_YM1   = mBoxYM1  ;
+    uint32_t const LATTICE_ZM1   = mBoxZM1  ;
+    uint32_t const LATTICE_XPRO  = mBoxXPRO ;
+    uint32_t const LATTICE_PROXY = mBoxPROXY;
 
     CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XM1_d, &LATTICE_XM1, sizeof(uint32_t)));
     CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_YM1_d, &LATTICE_YM1, sizeof(uint32_t)));
@@ -702,7 +676,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
 
     if(dummyTmpCounter != 0)
-        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
+        throw std::runtime_error( "mLattice occupation is wrong! Exiting... \n" );
 
     //start -z-order
     /*
@@ -739,11 +713,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     /*************************bind textures on GPU ****************************************************/
     std::cout << "bind textures "  << std::endl;
     //bind texture reference with linear memory
-    cudaBindTexture(0,texmLatticeRefOut,mLatticeOut_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
-    cudaBindTexture(0,texmLatticeTmpRef,mLatticeTmp_device,LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
     cudaBindTexture(0,texPolymerAndMonomerIsEvenAndOnXRef,mPolymerSystem_device,(4*nAllMonomers+1)*sizeof(intCUDA));
-    cudaBindTexture(0,texMonomersSpezies_A_ThreadIdx,MonomersSpeziesIdx_A_device,(nMonomersSpeciesA)*sizeof(uint32_t));
-    cudaBindTexture(0,texMonomersSpezies_B_ThreadIdx,MonomersSpeziesIdx_B_device,(nMonomersSpeciesB)*sizeof(uint32_t));
 
     /* new with texture object... they said it would be easier -.- */
     cudaResourceDesc resDescA;
@@ -776,12 +746,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     cudaCreateTextureObject( &texLatticeRefOut, &resDescRefOut, &texDescROM, NULL );
     cudaCreateTextureObject( &texLatticeTmpRef, &resDescTmpRef, &texDescROM, NULL );
 
-    /*************************end: bind textures on GPU ************************************************/
-
-    /*************************last check of system GPU *************************************************/
-
-    CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
-
+    /* could be "simplified" using cudaMemcpy2D" !!! */
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
     for( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         mPolymerSystem[3*i+0] = (int32_t) mPolymerSystem_host[4*i+0];
@@ -789,14 +755,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
         mPolymerSystem[3*i+2] = (int32_t) mPolymerSystem_host[4*i+2];
     }
 
-    /* why two times ??? */
     std::cout << "check system before simulation: " << std::endl;
     checkSystem();
-
-    std::cout << "check system before simulation: " << std::endl;
-    checkSystem();
-
-    /*************************end: last check of system GPU *********************************************/
 }
 
 /**
@@ -871,22 +831,20 @@ void UpdaterGPUScBFM_AB_Type::setPeriodicity(bool isPeriodicX, bool isPeriodicY,
 
 }
 
-void UpdaterGPUScBFM_AB_Type::setNetworkIngredients(uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL)
+void UpdaterGPUScBFM_AB_Type::setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL )
 {
-    nStars = numPEG; //number of Stars
+    nStars              = numPEG;    //number of Stars
     nMonomersPerStarArm = numPEGArm; //number OfMonomersPerStarArm
-    nCrosslinker = numCL; //number of Crosslinker
+    nCrosslinker        = numCL;     //number of Crosslinker
 
-    std::cout << "NumPEG on GPU: " << nStars << std::endl;
+    std::cout << "NumPEG on GPU         : " << nStars              << std::endl;
     std::cout << "NumPEGArmlength on GPU: " << nMonomersPerStarArm << std::endl;
-    std::cout << "NumCrosslinker on GPU: " << nCrosslinker << std::endl;
+    std::cout << "NumCrosslinker on GPU : " << nCrosslinker        << std::endl;
 
     //if (nMonomersPerStarArm != 29)
-        //throw std::runtime_error("nMonomersPerStarArm should be 29!!! Exiting...\n");
-
+        //throw std::runtime_error("nMonomersPerStarArm should be 29! Exiting...\n");
     //if ((nMonomersPerStarArm%2) != 1)
-        //    throw std::runtime_error("nMonomersPerStarArm should be an odd number!!! Exiting...\n");
-
+        //    throw std::runtime_error("nMonomersPerStarArm should be an odd number! Exiting...\n");
 }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity(uint32_t monoidx1, uint32_t monoidx2)
@@ -899,7 +857,7 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity(uint32_t monoidx1, uint32_t monoid
 
     //if((monosNNidx[monoidx1]->size > MAX_CONNECTIVITY) || (monosNNidx[monoidx2]->size > MAX_CONNECTIVITY))
     if ( monosNNidx[monoidx1]->size > MAX_CONNECTIVITY )
-        throw std::runtime_error("MAX_CONNECTIVITY  exceeded!!! Exiting...\n");
+        throw std::runtime_error("MAX_CONNECTIVITY  exceeded! Exiting...\n");
 }
 
 void UpdaterGPUScBFM_AB_Type::setLatticeSize
@@ -909,13 +867,12 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     uint32_t const boxZ
 )
 {
-    Box_X = boxX;
-    Box_Y = boxY;
-    Box_Z = boxZ;
-
-    Box_XM1 = boxX-1;
-    Box_YM1 = boxY-1;
-    Box_ZM1 = boxZ-1;
+    mBoxX   = boxX;
+    mBoxY   = boxY;
+    mBoxZ   = boxZ;
+    mBoxXM1 = boxX-1;
+    mBoxYM1 = boxY-1;
+    mBoxZM1 = boxZ-1;
 
     // determine the shift values for first multiplication
     uint32_t resultshift = -1;
@@ -925,7 +882,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
         dummy >>= 1;
         resultshift++;
     }
-    Box_XPRO=resultshift;
+    mBoxXPRO=resultshift;
 
     // determine the shift values for first multiplication
     resultshift = -1;
@@ -935,20 +892,18 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
         dummy >>= 1;
         resultshift++;
     }
-    Box_PROXY=resultshift;
+    mBoxPROXY = resultshift;
 
-    std::cout << "use bit shift for boxX: (1 << "<< Box_XPRO << " ) = " << (1 << Box_XPRO) << " = " << (boxX) << std::endl;
-    std::cout << "use bit shift for boxX*boxY: (1 << "<< Box_PROXY << " ) = " << (1 << Box_PROXY) << " = " << (boxX*boxY) << std::endl;
+    std::cout << "use bit shift for boxX: (1 << "<< mBoxXPRO << " ) = " << (1 << mBoxXPRO) << " = " << (boxX) << std::endl;
+    std::cout << "use bit shift for boxX*boxY: (1 << "<< mBoxPROXY << " ) = " << (1 << mBoxPROXY) << " = " << (boxX*boxY) << std::endl;
 
     // check if shift is correct
-    if ( (boxX != (1 << Box_XPRO)) || ((boxX*boxY) != (1 << Box_PROXY)) )
+    if ( (boxX != (1 << mBoxXPRO)) || ((boxX*boxY) != (1 << mBoxPROXY)) )
         throw  std::runtime_error( "Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n" );
 
     //init lattice
-    mLattice = new uint8_t[Box_X*Box_Y*Box_Z];
-
-    for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
-        mLattice[i]=0;
+    mLattice = new uint8_t[ mBoxX * mBoxY * mBoxZ ];
+    std::memset( (void *) mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
 }
 
 void UpdaterGPUScBFM_AB_Type::populateLattice()
@@ -956,45 +911,41 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
     //if(!GPUScBFM.StartSimulationGPU())
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
-        mLattice[  ( mPolymerSystem[3*i+0] & Box_XM1) +
-                 ( ( mPolymerSystem[3*i+1] & Box_YM1 ) << Box_XPRO ) +
-                 ( ( mPolymerSystem[3*i+2] & Box_ZM1 ) << Box_PROXY) ] = 1;
+        mLattice[  ( mPolymerSystem[3*i+0] & mBoxXM1) +
+                 ( ( mPolymerSystem[3*i+1] & mBoxYM1 ) << mBoxXPRO ) +
+                 ( ( mPolymerSystem[3*i+2] & mBoxZM1 ) << mBoxPROXY) ] = 1;
     }
 }
 
 void UpdaterGPUScBFM_AB_Type::checkSystem()
 {
-    std::cout << "checkSystem" << std::endl;
-
     int countermLatticeStart = 0;
 
         //if(!GPUScBFM.StartSimulationGPU())
-    for(int i = 0; i < Box_X*Box_Y*Box_Z; i++)
+    for ( int i = 0; i < mBoxX * mBoxY * mBoxZ; ++i )
         mLattice[i]=0;
 
-    for (int idxMono=0; idxMono < (nAllMonomers); idxMono++)
+    for ( int idxMono = 0; idxMono < nAllMonomers; ++idxMono )
     {
         int32_t xpos = mPolymerSystem[3*idxMono    ];
         int32_t ypos = mPolymerSystem[3*idxMono+1  ];
         int32_t zpos = mPolymerSystem[3*idxMono+2  ];
 
-        mLattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((0 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-
-        mLattice[((0 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((1 + xpos) & Box_XM1) + (((0 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((0 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-        mLattice[((1 + xpos) & Box_XM1) + (((1 + ypos) & Box_YM1)<< Box_XPRO) + (((1 + zpos) & Box_ZM1)<< Box_PROXY)]=1;
-
+        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
     }
 
-    for (int x=0;x<Box_X;x++)
-    for (int y=0;y<Box_Y;y++)
-    for (int z=0;z<Box_Z;z++)
+    for ( int x = 0; x < mBoxX; ++x )
+    for ( int y = 0; y < mBoxY; ++y )
+    for ( int z = 0; z < mBoxZ; ++z )
     {
-       countermLatticeStart += (mLattice[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
+       countermLatticeStart += (mLattice[x + (y << mBoxXPRO) + (z << mBoxPROXY)]==0)? 0 : 1;
        //if (mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)] != 0)
        //cout << x << " " << y << " " << z << "\t" <<  mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]<< endl;
 
@@ -1004,7 +955,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     std::cout << "occupied lattice sites: " << countermLatticeStart << " of " << (nAllMonomers*8) << std::endl;
 
     if(countermLatticeStart != (nAllMonomers*8))
-        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
+        throw std::runtime_error("mLattice occupation is wrong! Exiting... \n");
 
 
     std::cout << "check bonds" << std::endl;
@@ -1020,14 +971,14 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
          {
              std::cout << "Invalid XBond..."<< std::endl;
              std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid XBond!!! Exiting...\n");
+             throw std::runtime_error("Invalid XBond! Exiting...\n");
          }
 
          if((bond_y > 3) || (bond_y < -3))
          {
              std::cout << "Invalid YBond..."<< std::endl;
              std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid YBond!!! Exiting...\n");
+             throw std::runtime_error("Invalid YBond! Exiting...\n");
 
          }
 
@@ -1035,7 +986,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
          {
              std::cout << "Invalid ZBond..."<< std::endl;
              std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(idxMono+1)<< " (pos "<< mPolymerSystem[3*idxMono  ] <<","<<mPolymerSystem[3*idxMono+1]<<","<<mPolymerSystem[3*idxMono+2] <<") and " << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid ZBond!!! Exiting...\n");
+             throw std::runtime_error("Invalid ZBond! Exiting...\n");
          }
 
 
@@ -1046,23 +997,27 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
             std::cout << (monosNNidx[idxMono]->bondsMonomerIdx[idxNN]) << "\t x: " << (mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]])   << "\t y:" << mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+1]<< "\t z:" << mPolymerSystem[3*monosNNidx[idxMono]->bondsMonomerIdx[idxNN]+2]<< std::endl;
             std::cout << idxMono << "\t x:" << mPolymerSystem[3*idxMono  ] << "\t y:" << mPolymerSystem[3*idxMono+1]<< "\t z:" << mPolymerSystem[3*idxMono  ]<< std::endl;
 
-            throw std::runtime_error("Bond is NOT allowed!!! Exiting...\n");
+            throw std::runtime_error("Bond is NOT allowed! Exiting...\n");
         }
 
     }
 }
 
-void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
+
+void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
+(
+    int32_t const nMonteCarloSteps
+)
 {
     std::clock_t const t0 = std::clock();
 
-    // run simulation
-    for ( int32_t timeS = 1; timeS <= nrMCS; ++timeS )
+    /* run simulation */
+    for ( int32_t iStep = 1; iStep <= nMonteCarloSteps; ++iStep )
     {
-        /******* OneMCS ******/
-        for(uint32_t cou = 0; cou < 2; cou++)
+        /* one Monte-Carlo step */
+        for ( uint32_t iSubStep = 0; iSubStep < 2; ++iSubStep )
         {
-            switch(randomNumbers.r250_rand32()%2)
+            switch ( randomNumbers.r250_rand32() % 2 )
             {
                 case 0:  // run Spezies_A monomers
                     kernelSimulationScBFMCheckSpezies
@@ -1109,116 +1064,27 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
                 default: break;
             }
         }
-
-        /*
-        if ((timeS%saveTime==0))
-        {
-            //copy information from GPU to Host
-
-            //check the tmpmLattice
-            cout << "copy back mLatticeTmp_host: " << endl;
-            CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-            int dummyTmpCounter=0;
-            for (int x=0;x<LATTICE_X;x++)
-                for (int y=0;y<LATTICE_Y;y++)
-                    for (int z=0;z<LATTICE_Z;z++)
-                             {
-                                dummyTmpCounter += (mLatticeTmp_host[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]==0)? 0 : 1;
-                             }
-            cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << endl;
-
-
-
-            CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-            for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-                    mLattice[i]=0;
-
-            for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-                mLattice[i]=mLatticeOut_host[i];
-
-            if(dummyTmpCounter != 0)
-                    exit(-1);
-
-            //start -z-order
-            //
-            //cout << "save -- recalculate mLattice: " << endl;
-            //fetch from device and check again
-            //    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-            //    {
-            //        if(mLatticeOut_host[i]==1)
-            //        {
-            //            uint32_t dummyhost = i;
-            //            uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
-            //            uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
-            //            uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
-            //            uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
-
-
-                        //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
-            //            mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
-                        //
-            //        }
-                    //
-            //    }
-                //end -z-order
-            //
-
-
-            CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
-
-            for (uint32_t i=0; i<nAllMonomers; i++)
-            {
-                mPolymerSystem[3*i]=(int32_t) mPolymerSystem_host[4*i];
-                mPolymerSystem[3*i+1]=(int32_t) mPolymerSystem_host[4*i+1];
-                mPolymerSystem[3*i+2]=(int32_t) mPolymerSystem_host[4*i+2];
-                //cout << i << "  : " << mPolymerSystem_host[4*i+3] << endl;
-            }
-
-            checkSystem();
-
-
-            SaveSystem(timeS);
-            cout << "actual time: " << timeS << endl;
-
-            difference = time(NULL) - startTimer;
-            cout << "mcs = " << (timeS+MCSTime)  << "  speed [performed monomer try and move/s] = MCS*N/t: " << (1.0 * timeS * ((1.0 * nAllMonomers) / (1.0f * difference))) << "     runtime[s]:" << (1.0f * difference) << endl;
-
-
-        }
-        */
     }
 
-    //All MCS are done- copy back...
-
-
-    //copy information from GPU to Host
-
-    //check the tmpmLattice
-    std::cout << "copy back mLatticeTmp_host: " << std::endl;
-    CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+    /* all MCS are done- copy information back from GPU to host */
+    CUDA_CHECK( cudaMemcpy( mLatticeTmp_host, mLatticeTmp_device, mBoxX * mBoxY * mBoxZ * sizeof( uint8_t ), cudaMemcpyDeviceToHost ) );
 
     int dummyTmpCounter=0;
-    for ( int x = 0; x < Box_X; ++x )
-    for ( int y = 0; y < Box_Y; ++y )
-    for ( int z = 0; z < Box_Z; ++z )
-        dummyTmpCounter += (mLatticeTmp_host[x + (y << Box_XPRO) + (z << Box_PROXY)]==0)? 0 : 1;
-    std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
-
-
-    CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-    /* why set it to 0 if it will have values written to it right after that
-     * anyway ??? */
-    for ( int i = 0; i < Box_X * Box_Y * Box_Z; ++i )
-        mLattice[i] = 0;
-
-    for ( int i = 0; i < Box_X * Box_Y * Box_Z; ++i )
-        mLattice[i] = mLatticeOut_host[i];
-
+    for ( int x = 0; x < mBoxX; ++x )
+    for ( int y = 0; y < mBoxY; ++y )
+    for ( int z = 0; z < mBoxZ; ++z )
+        dummyTmpCounter += mLatticeTmp_host[ x + ( y << mBoxXPRO ) + ( z << mBoxPROXY ) ] == 0 ? 0 : 1;
     if ( dummyTmpCounter != 0 )
-        throw std::runtime_error("mLattice occupation is wrong!!! Exiting... \n");
+    {
+        std::stringstream msg;
+        msg << "latticeTmp occupation (" << dummyTmpCounter << ") should be 0! Exiting ...\n";
+        throw std::runtime_error( msg.str() );
+    }
+
+    /* why isn't this copied directly into mLattice ??? */
+    CUDA_CHECK( cudaMemcpy( mLatticeOut_host, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof( uint8_t ), cudaMemcpyDeviceToHost ) );
+    for ( int i = 0; i < mBoxX * mBoxY * mBoxZ; ++i )
+        mLattice[i] = mLatticeOut_host[i];
 
     //start -z-order
     /*
@@ -1244,9 +1110,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
         //end -z-order
     */
 
-
-    CUDA_CHECK(cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost));
-
+    /* copy into mPolymerSystem and drop the property tag while doing so.
+     * would be easier and probably more efficient if mPolymerSystem_device/host
+     * would be a struct of arrays instead of an array of structs !!! */
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
@@ -1259,15 +1126,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
     std::clock_t const t1 = std::clock();
     double const dt = float(t1-t0) / CLOCKS_PER_SEC;
     std::cout
-    << "run time (GPU): " << nrMCS << "\n"
-    << "mcs = " << (nrMCS)  << "  speed [performed monomer try and move/s] = MCS*N/t: "
-    << nrMCS * ( nAllMonomers / dt )  << "     runtime[s]:" << dt << std::endl;
+    << "run time (GPU): " << nMonteCarloSteps << "\n"
+    << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
+    << nMonteCarloSteps * ( nAllMonomers / dt )  << "     runtime[s]:" << dt << std::endl;
 }
 
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
     // copy information from GPU to Host
-    CUDA_CHECK( cudaMemcpy(mLattice, mLatticeOut_device, Box_X*Box_Y*Box_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost) );
+    CUDA_CHECK( cudaMemcpy(mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost) );
     CUDA_CHECK( cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost) );
 
     for (uint32_t i=0; i<nAllMonomers; i++)
@@ -1294,7 +1161,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
             //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
             std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
 
-            throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
+            throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
         }
 
         for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
@@ -1306,7 +1173,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
 
                 std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
 
-                throw std::runtime_error("Connectivity is corrupted!!! Maybe your Simulation is wrong!!! Exiting...\n");
+                throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
             }
         }
     }
@@ -1317,12 +1184,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     checkSystem();
 
     //unbind texture reference to free resource
-    cudaUnbindTexture( texmLatticeRefOut                   );
-    cudaUnbindTexture( texmLatticeTmpRef                   );
     cudaUnbindTexture( texPolymerAndMonomerIsEvenAndOnXRef );
-    cudaUnbindTexture( texMonomersSpezies_A_ThreadIdx      );
-    cudaUnbindTexture( texMonomersSpezies_B_ThreadIdx      );
-
     cudaDestroyTextureObject( texSpeciesIndicesA );
     cudaDestroyTextureObject( texSpeciesIndicesB );
     texSpeciesIndicesA = 0;

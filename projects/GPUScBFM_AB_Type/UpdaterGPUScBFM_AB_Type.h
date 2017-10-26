@@ -83,18 +83,16 @@ private:
         uint32_t bondsMonomerIdx[ MAX_CONNECTIVITY ];
     };
 
-    MonoNNIndex **monosNNidx;
+    MonoNNIndex ** monosNNidx;
 
-    uint32_t   Box_X;
-    uint32_t   Box_Y;
-    uint32_t   Box_Z;
-
-    uint32_t   Box_XM1;
-    uint32_t   Box_YM1;
-    uint32_t   Box_ZM1;
-
-    uint32_t   Box_XPRO;
-    uint32_t   Box_PROXY;
+    uint32_t   mBoxX;
+    uint32_t   mBoxY;
+    uint32_t   mBoxZ;
+    uint32_t   mBoxXM1;
+    uint32_t   mBoxYM1;
+    uint32_t   mBoxZM1;
+    uint32_t   mBoxXPRO;
+    uint32_t   mBoxPROXY;
 
     intCUDA  * mPolymerSystem_device;
     intCUDA  * mPolymerSystem_host;
@@ -116,6 +114,8 @@ private:
     uint32_t   numblocksSpecies_A;
     uint32_t   numblocksSpecies_B;
 
+    uint32_t nMonomersSpeciesA;
+    uint32_t nMonomersSpeciesB;
 
     /**
      * Packs the three given coordinates into 9 bits. Note that 2^9=512. This

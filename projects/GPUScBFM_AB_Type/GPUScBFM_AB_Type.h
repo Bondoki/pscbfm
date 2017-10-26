@@ -10,7 +10,7 @@
 
 
 /**
- * Why is this abstraction layer being used, isntead of just incorporating
+ * Why is this abstraction layer being used, instead of just incorporating
  * the GPU updated into this class ???
  */
 
@@ -114,7 +114,7 @@ public:
     }
 
     /**
-     * Was the 'virtual' really necessary ??? I don't think there will every be
+     * Was the 'virtual' really necessary ??? I don't think there will ever be
      * some class inheriting from this class...
      * https://en.wikipedia.org/wiki/Virtual_function
      */
