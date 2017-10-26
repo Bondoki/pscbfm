@@ -599,7 +599,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     /************************end: creating look-up for species*****************************************/
 
     /* calculate kernel config */
-    /* ceilDiv better ? */
+    /* ceilDiv better ??? */
     numblocksSpecies_A = (nMonomersSpeciesA-1)/NUMTHREADS+1;
     numblocksSpecies_B = (nMonomersSpeciesB-1)/NUMTHREADS+1;
 
@@ -653,144 +653,44 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
             //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
         }
     }
-
-    // copy to connectivity to device
-    CUDA_CHECK( cudaMemcpy(MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice));
-
-    /****************************end: copy monomer informations ****************************************/
+    CUDA_CHECK( cudaMemcpy( MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice ) );
 
     checkSystem();
 
-    /****************************creating lattice******************************************************/
+    /* creating lattice */
+    CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
+    CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
 
-    uint32_t const LATTICE_X     = mBoxX    ;
-    uint32_t const LATTICE_Y     = mBoxY    ;
-    uint32_t const LATTICE_Z     = mBoxZ    ;
-    uint32_t const LATTICE_XM1   = mBoxXM1  ;
-    uint32_t const LATTICE_YM1   = mBoxYM1  ;
-    uint32_t const LATTICE_ZM1   = mBoxZM1  ;
-    uint32_t const LATTICE_XPRO  = mBoxXLog2 ;
-    uint32_t const LATTICE_PROXY = mBoxXYLog2;
+    mLatticeOut_host = (uint8_t *) malloc( mBoxX*mBoxY*mBoxZ*sizeof(uint8_t));
+    mLatticeTmp_host = (uint8_t *) malloc( mBoxX*mBoxY*mBoxZ*sizeof(uint8_t));
+    std::cout << "try to allocate : " << (mBoxX*mBoxY*mBoxZ*sizeof(uint8_t)) << " bytes = " << (mBoxX*mBoxY*mBoxZ*sizeof(uint8_t)/(1024.0*1024.0)) << " MB lattice on GPU " << std::endl;
+    CUDA_CHECK( cudaMalloc( (void **) &mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_device ) ) );
+    CUDA_CHECK( cudaMalloc( (void **) &mLatticeTmp_device, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeTmp_device ) ) );
+    CUDA_CHECK( cudaMemset( mLatticeTmp_device, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeTmp_device ) ) );
 
-    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXM1, &LATTICE_XM1, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxYM1, &LATTICE_YM1, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxZM1, &LATTICE_ZM1, sizeof(uint32_t)));
-
-    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXLog2, &LATTICE_XPRO, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXYLog2, &LATTICE_PROXY, sizeof(uint32_t)));
-
-
-    mLatticeOut_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
-
-    mLatticeTmp_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
-
-    std::cout << "try to allocate : " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)) << " bytes = " << (LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)/(1024.0*1024.0)) << " MB lattice on GPU " << std::endl;
-
-
-    CUDA_CHECK(cudaMalloc((void **) &mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
-    CUDA_CHECK(cudaMalloc((void **) &mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t)));
-
-
-    //copy information from Host to GPU
-    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
+    std::memset( mLatticeOut_host, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_host ) );
+    for ( int t = 0; t < nAllMonomers; ++t )
     {
-        mLatticeOut_host[i]=0;
-        mLatticeTmp_host[i]=0;
-
+        #ifdef USEZCURVE
+            uint32_t xk = mPolymerSystem[ 3*t+0 ] & mBoxXM1;
+            uint32_t yk = mPolymerSystem[ 3*t+1 ] & mBoxYM1;
+            uint32_t zk = mPolymerSystem[ 3*t+2 ] & mBoxZM1;
+            uint32_t inter3 = interleave3( xk/2 , yk/2, zk/2 );
+            mLatticeOut_host[ ( ( mPolymerSystem_host[ 4*t+3 ] & 1 ) << 23 ) + inter3 ] = 1;
+        #else
+        mLatticeOut_host[ linearizeBoxVectorIndex( mPolymerSystem[ 3*t+0 ],
+                                                   mPolymerSystem[ 3*t+1 ],
+                                                   mPolymerSystem[ 3*t+2 ] ) ] = 1;
+        #endif
     }
+    CUDA_CHECK( cudaMemcpy( mLatticeOut_device, mLatticeOut_host, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_host ), cudaMemcpyHostToDevice ) );
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem_host, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
 
-    //fill the tmpmLattice - should be zero everywhere
-    CUDA_CHECK(cudaMemcpy(mLatticeTmp_device, mLatticeTmp_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
-    //start z-curve
-    /*
-    for (int t = 0; t < nAllMonomers; t++)
-    {
-        uint32_t xk = (mPolymerSystem[3*t  ]&LATTICE_XM1);
-        uint32_t yk = (mPolymerSystem[3*t+1]&LATTICE_YM1);
-        uint32_t zk = (mPolymerSystem[3*t+2]&LATTICE_ZM1);
-
-        uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
-
-        mLatticeOut_host[((mPolymerSystem_host[4*t+3] & 1) << 23) +inter3] = 1;
-    }
-    */
-    //end- z-curve
-
-    for (int t = 0; t < nAllMonomers; t++)
-    {
-        uint32_t xk = (mPolymerSystem[3*t  ]&LATTICE_XM1);
-        uint32_t yk = (mPolymerSystem[3*t+1]&LATTICE_YM1);
-        uint32_t zk = (mPolymerSystem[3*t+2]&LATTICE_ZM1);
-
-        //uint32_t inter3 = interleave3(xk/2,yk/2,zk/2);
-
-        mLatticeOut_host[xk + (yk << LATTICE_XPRO) + (zk << LATTICE_PROXY)] = 1;
-    }
-
-    std::cout << "checking the  mLatticeOut_host: " << std::endl;
-    CUDA_CHECK(cudaMemcpy(mLatticeOut_device, mLatticeOut_host, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyHostToDevice));
-
-
-    //fetch from device and check again
-    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-            mLattice[i]=0;
-
-    std::cout << "copy back mLatticeOut_host: " << std::endl;
-    CUDA_CHECK(cudaMemcpy(mLatticeOut_host, mLatticeOut_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-        mLattice[i]=mLatticeOut_host[i];
-
-    std::cout << "copy back mLatticeTmp_host: " << std::endl;
-    CUDA_CHECK(cudaMemcpy(mLatticeTmp_host, mLatticeTmp_device, LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-
-    int dummyTmpCounter=0;
-    for (int x=0;x<LATTICE_X;x++)
-    for (int y=0;y<LATTICE_Y;y++)
-    for (int z=0;z<LATTICE_Z;z++)
-        dummyTmpCounter += ( mLatticeTmp_host[x + (y << LATTICE_XPRO) + ( z << LATTICE_PROXY)] == 0 ) ? 0 : 1;
-
-    std::cout << "occupied latticeTmp sites: " << dummyTmpCounter << " of " << (0) << std::endl;
-
-    if(dummyTmpCounter != 0)
-        throw std::runtime_error( "mLattice occupation is wrong! Exiting... \n" );
-
-    //start -z-order
-    /*
-    cout << "recalculate mLattice: " << endl;
-    //fetch from device and check again
-    for(int i = 0; i < LATTICE_X*LATTICE_Y*LATTICE_Z; i++)
-    {
-        if(mLatticeOut_host[i]==1)
-        {
-            uint32_t dummyhost = i;
-            uint32_t onX = (dummyhost / (1 <<23)); //0 on O, 1 on X
-            uint32_t zl = 2*( deinterleave3_Z((dummyhost % (1 <<23)))) + onX;
-            uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
-            uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
-
-
-            //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
-            mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
-
-        }
-
-    }
-    */
-    //end -z-order
-
-
-    /*************************end: creating lattice****************************************************/
-
-
-    /*************************copy monomer positions***************************************************/
-    CUDA_CHECK(cudaMemcpy(mPolymerSystem_device, mPolymerSystem_host, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyHostToDevice));
-    /*************************end: copy monomer positions**********************************************/
-
-    /*************************bind textures on GPU ****************************************************/
-    std::cout << "bind textures "  << std::endl;
-    //bind texture reference with linear memory
-    cudaBindTexture(0,texPolymerAndMonomerIsEvenAndOnXRef,mPolymerSystem_device,(4*nAllMonomers+1)*sizeof(intCUDA));
+    /* bind textures */
+    cudaBindTexture( 0, texPolymerAndMonomerIsEvenAndOnXRef, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
 
     /* new with texture object... they said it would be easier -.- */
     cudaResourceDesc resDescA;
@@ -815,7 +715,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     /* lattice textures */
     resDescRefOut.res.linear.desc.x = 8; // bits per channel
-    resDescRefOut.res.linear.sizeInBytes = LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t);
+    resDescRefOut.res.linear.sizeInBytes = mBoxX*mBoxY*mBoxZ*sizeof(uint8_t);
     cudaResourceDesc resDescTmpRef = resDescRefOut;
     resDescRefOut.res.linear.devPtr = mLatticeOut_device;
     resDescTmpRef.res.linear.devPtr = mLatticeTmp_device;
@@ -823,13 +723,31 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     cudaCreateTextureObject( &texLatticeRefOut, &resDescRefOut, &texDescROM, NULL );
     cudaCreateTextureObject( &texLatticeTmpRef, &resDescTmpRef, &texDescROM, NULL );
 
-    /* could be "simplified" using cudaMemcpy2D" !!! */
-    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
-    for( uint32_t i = 0; i < nAllMonomers; ++i )
+    /* The memory transfer is this complex because int16_t needs to be
+     * converted to int32_t if cudaInt == int16_t */
+    if ( sizeof( *mPolymerSystem ) == sizeof( *mPolymerSystem_device ) )
     {
-        mPolymerSystem[3*i+0] = (int32_t) mPolymerSystem_host[4*i+0];
-        mPolymerSystem[3*i+1] = (int32_t) mPolymerSystem_host[4*i+1];
-        mPolymerSystem[3*i+2] = (int32_t) mPolymerSystem_host[4*i+2];
+        std::cerr << "[" << __FILENAME__ << "::initialize] Can use cudaMemcpy2D (untested!)\n";
+        throw std::runtime_error( "Untested. Uncomment if you work on it." );
+        CUDA_CHECK( cudaMemcpy2D(
+            mPolymerSystem       , 3 * sizeof( *mPolymerSystem ),
+            mPolymerSystem_device, 4 * sizeof( *mPolymerSystem_device ),
+            3 * sizeof( *mPolymerSystem ), nAllMonomers,
+            cudaMemcpyDeviceToHost
+        ) );
+    }
+    else
+    {
+        std::cerr << "[" << __FILENAME__ << "::initialize] Can't use cudaMemcpy2D"
+            << " ( sizeof polymersystem, host: " << sizeof( *mPolymerSystem )
+            << ", GPU: " << sizeof( *mPolymerSystem_device ) << ")\n";
+        CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
+        for( uint32_t i = 0; i < nAllMonomers; ++i )
+        {
+            mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
+            mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
+            mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
+        }
     }
 
     std::cout << "check system before simulation: " << std::endl;

@@ -35,7 +35,7 @@
 #define NUMTHREADS 256
 
 /* still used ??? Will this need a switch? */
-#if false
+#if 0
     typedef uint32_t uintCUDA;
     typedef int32_t  intCUDA;
     #define MASK5BITS 0x7FFFFFE0
@@ -103,7 +103,8 @@ private:
     uint8_t  * mLatticeTmp_device;
     uint8_t  * mLatticeTmp_host;
 
-    MonoInfo * MonoInfo_host, *MonoInfo_device;   // Pointer to host & device arrays of structure
+    /* stores connectivity information for the monomers */
+    MonoInfo * MonoInfo_host, *MonoInfo_device;
 
     uint32_t * MonomersSpeziesIdx_A_host;
     uint32_t * MonomersSpeziesIdx_B_host;
