@@ -85,14 +85,14 @@ private:
 
     MonoNNIndex ** monosNNidx;
 
-    uint32_t   mBoxX;
-    uint32_t   mBoxY;
-    uint32_t   mBoxZ;
-    uint32_t   mBoxXM1;
-    uint32_t   mBoxYM1;
-    uint32_t   mBoxZM1;
-    uint32_t   mBoxXPRO;
-    uint32_t   mBoxPROXY;
+    uint32_t   mBoxX     ;
+    uint32_t   mBoxY     ;
+    uint32_t   mBoxZ     ;
+    uint32_t   mBoxXM1   ;
+    uint32_t   mBoxYM1   ;
+    uint32_t   mBoxZM1   ;
+    uint32_t   mBoxXLog2 ;
+    uint32_t   mBoxXYLog2;
 
     intCUDA  * mPolymerSystem_device;
     intCUDA  * mPolymerSystem_host;

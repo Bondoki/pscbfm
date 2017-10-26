@@ -592,8 +592,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     uint32_t const LATTICE_XM1   = mBoxXM1  ;
     uint32_t const LATTICE_YM1   = mBoxYM1  ;
     uint32_t const LATTICE_ZM1   = mBoxZM1  ;
-    uint32_t const LATTICE_XPRO  = mBoxXPRO ;
-    uint32_t const LATTICE_PROXY = mBoxPROXY;
+    uint32_t const LATTICE_XPRO  = mBoxXLog2 ;
+    uint32_t const LATTICE_PROXY = mBoxXYLog2;
 
     CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XM1_d, &LATTICE_XM1, sizeof(uint32_t)));
     CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_YM1_d, &LATTICE_YM1, sizeof(uint32_t)));
@@ -874,32 +874,26 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     mBoxYM1 = boxY-1;
     mBoxZM1 = boxZ-1;
 
-    // determine the shift values for first multiplication
-    uint32_t resultshift = -1;
+    /* determine log2 for mBoxX and mBoxX * mBoxY to be used for bitshifting
+     * the indice instead of multiplying ... WHY??? I don't think it is faster,
+     * but much less readable */
+    mBoxXLog2 = 0;
     uint32_t dummy = boxX;
-    while ( dummy != 0 )
-    {
-        dummy >>= 1;
-        resultshift++;
-    }
-    mBoxXPRO=resultshift;
-
-    // determine the shift values for first multiplication
-    resultshift = -1;
+    while ( dummy >>= 1 ) ++mBoxXLog2;
+    mBoxXYLog2 = 0;
     dummy = boxX*boxY;
-    while ( dummy != 0 )
-    {
-        dummy >>= 1;
-        resultshift++;
-    }
-    mBoxPROXY = resultshift;
+    while ( dummy >>= 1 ) ++mBoxXYLog2;
 
-    std::cout << "use bit shift for boxX: (1 << "<< mBoxXPRO << " ) = " << (1 << mBoxXPRO) << " = " << (boxX) << std::endl;
-    std::cout << "use bit shift for boxX*boxY: (1 << "<< mBoxPROXY << " ) = " << (1 << mBoxPROXY) << " = " << (boxX*boxY) << std::endl;
+    std::cout
+        << "use bit shift for boxX     : (1 << "<< mBoxXLog2  << " ) = "
+        << ( 1 << mBoxXLog2  ) << " = " << mBoxX
+        << "use bit shift for boxX*boxY: (1 << "<< mBoxXYLog2 << " ) = "
+        << ( 1 << mBoxXYLog2 ) << " = " << mBoxX*boxY
+        << std::endl;
 
     // check if shift is correct
-    if ( (boxX != (1 << mBoxXPRO)) || ((boxX*boxY) != (1 << mBoxPROXY)) )
-        throw  std::runtime_error( "Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n" );
+    if ( boxX != ( 1 << mBoxXLog2 ) || boxX * boxY != ( 1 << mBoxXYLog2 ) )
+        throw std::runtime_error( "Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n" );
 
     //init lattice
     mLattice = new uint8_t[ mBoxX * mBoxY * mBoxZ ];
@@ -912,8 +906,8 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
         mLattice[  ( mPolymerSystem[3*i+0] & mBoxXM1) +
-                 ( ( mPolymerSystem[3*i+1] & mBoxYM1 ) << mBoxXPRO ) +
-                 ( ( mPolymerSystem[3*i+2] & mBoxZM1 ) << mBoxPROXY) ] = 1;
+                 ( ( mPolymerSystem[3*i+1] & mBoxYM1 ) << mBoxXLog2 ) +
+                 ( ( mPolymerSystem[3*i+2] & mBoxZM1 ) << mBoxXYLog2) ] = 1;
     }
 }
 
@@ -931,21 +925,21 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
         int32_t ypos = mPolymerSystem[3*idxMono+1  ];
         int32_t zpos = mPolymerSystem[3*idxMono+2  ];
 
-        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((0 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXPRO) + (((1 + zpos) & mBoxZM1)<< mBoxPROXY)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
     }
 
     for ( int x = 0; x < mBoxX; ++x )
     for ( int y = 0; y < mBoxY; ++y )
     for ( int z = 0; z < mBoxZ; ++z )
     {
-       countermLatticeStart += (mLattice[x + (y << mBoxXPRO) + (z << mBoxPROXY)]==0)? 0 : 1;
+       countermLatticeStart += (mLattice[x + (y << mBoxXLog2) + (z << mBoxXYLog2)]==0)? 0 : 1;
        //if (mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)] != 0)
        //cout << x << " " << y << " " << z << "\t" <<  mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]<< endl;
 
@@ -1073,7 +1067,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     for ( int x = 0; x < mBoxX; ++x )
     for ( int y = 0; y < mBoxY; ++y )
     for ( int z = 0; z < mBoxZ; ++z )
-        dummyTmpCounter += mLatticeTmp_host[ x + ( y << mBoxXPRO ) + ( z << mBoxPROXY ) ] == 0 ? 0 : 1;
+        dummyTmpCounter += mLatticeTmp_host[ x + ( y << mBoxXLog2 ) + ( z << mBoxXYLog2 ) ] == 0 ? 0 : 1;
     if ( dummyTmpCounter != 0 )
     {
         std::stringstream msg;
