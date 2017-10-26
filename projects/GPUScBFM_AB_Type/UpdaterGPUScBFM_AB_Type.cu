@@ -192,6 +192,11 @@ __device__ inline bool checkLattice
  *             - via shared memory and are limited to 256 bytes on devices of compute capability 1.x,
  *             - via constant memory and are limited to 4 KB on devices of compute capability 2.x and higher.
  *            __device__ and __global__ functions cannot have a variable number of arguments.
+ * Note: all of the three kernels do quite few work. They basically just fetch
+ *       data, and check one condition and write out again. There isn't even
+ *       a loop and most of the work seems to be boiler plate initialization
+ *       code which could be cut if the kernels could be merged together.
+ *       Why are there three kernels instead of just one ???
  */
 __global__ void kernelSimulationScBFMCheckSpezies
 (
@@ -377,114 +382,59 @@ __global__ void kernelSimulationScBFMPerformSpecies
 }
 
 
-__global__ void runSimulationScBFMZeroArraySpeziesA_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d) {
-
-
-      int idxA=blockIdx.x*blockDim.x+threadIdx.x;
-
-      if(idxA < nMonomersSpeciesA_d)
-      {
-            //select random monomer
-          uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_A_ThreadIdx,idxA);
-
-
-          intCUDA const MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
-
-      if(((MonoProperty&3) != 0))    //possible move
-      {
-          intCUDA const x0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-          intCUDA const y0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-          intCUDA const z0= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
-
-          //select random direction
-          uintCUDA const random_int = (MonoProperty&28)>>2;
-
-          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-          intCUDA const dx = DXTable_d[random_int];
-          intCUDA const dy = DYTable_d[random_int];
-          intCUDA const dz = DZTable_d[random_int];
-
-
-          // possible move but not allowed
-          if(((MonoProperty&3) == 1))
-          {
-              mLatticeTmp_d[((x0 + dx     )&LATTICE_XM1_d) + (((y0 + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-          }
-          else //allowed move with all circumstance
-          {
-              mPolymerSystem_d[4*randomMonomer  ] = x0 +dx;
-              mPolymerSystem_d[4*randomMonomer+1] = y0 +dy;
-              mPolymerSystem_d[4*randomMonomer+2] = z0 +dz;
-              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-
-              mLatticeTmp_d[((x0 + dx     )&LATTICE_XM1_d) + (((y0 + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-              //mLatticeTmp_d[((x0      )&LATTICE_XM1_d) + (((y0      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-          }
-          // everything fits -> perform the move - add the information
-
-      }
-
-      }
-}
-
-
-__global__ void runSimulationScBFMZeroArraySpeziesB_gpu(intCUDA *mPolymerSystem_d, uint8_t *mLatticeTmp_d)
+__global__ void kernelSimulationScBFMZeroArraySpecies
+(
+    intCUDA             * const mPolymerSystem_d ,
+    uint8_t             * const mLatticeTmp_d    ,
+    cudaTextureObject_t   const texSpeciesIndices,
+    uint32_t              const nMonomers
+)
 {
-      int idxB=blockIdx.x*blockDim.x+threadIdx.x;
+    int linId = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( linId < nMonomers )
+    {
+        uint32_t const randomMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+        intCUDA  const MonoProperty  = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+3 );
 
-      if(idxB < nMonomersSpeciesB_d)
-      {
-            //select random monomer
-          uint32_t const randomMonomer=tex1Dfetch(texMonomersSpezies_B_ThreadIdx,idxB);
+        if ( ( MonoProperty & 3 ) != 0 )    //possible move
+        {
+            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+0 );
+            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+1 );
+            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*randomMonomer+2 );
 
+            //select random direction
+            uintCUDA const random_int = ( MonoProperty & 28 ) >> 2;
 
-          intCUDA const MonoProperty = tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3);
+            //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+            intCUDA const dx = DXTable_d[ random_int ];
+            intCUDA const dy = DYTable_d[ random_int ];
+            intCUDA const dz = DZTable_d[ random_int ];
 
-      if(((MonoProperty&3) != 0))    //possible move
-      {
-          intCUDA const xPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer);
-          intCUDA const yPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+1);
-          intCUDA const zPosMono= tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+2);
+            // possible move but not allowed
+            if ( ( MonoProperty & 3 ) == 1 )
+            {
+                mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
+                             ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                             ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
+                mPolymerSystem_d[ 4*randomMonomer+3 ] = MonoProperty & MASK5BITS; // delete the first 5 bits
+            }
+            else //allowed move with all circumstance
+            {
+                mPolymerSystem_d[ 4*randomMonomer+0 ] = x0 + dx;
+                mPolymerSystem_d[ 4*randomMonomer+1 ] = y0 + dy;
+                mPolymerSystem_d[ 4*randomMonomer+2 ] = z0 + dz;
+                mPolymerSystem_d[ 4*randomMonomer+3 ] = MonoProperty & MASK5BITS; // delete the first 5 bits
 
-          //select random direction
-          uintCUDA const random_int = (tex1Dfetch(texPolymerAndMonomerIsEvenAndOnXRef,4*randomMonomer+3)&28)>>2;
-
-          //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-          intCUDA const dx = DXTable_d[random_int];
-          intCUDA const dy = DYTable_d[random_int];
-          intCUDA const dz = DZTable_d[random_int];
-
-
-
-          if(((MonoProperty&3) == 1))
-          {
-              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-
-          }
-          else
-          {
-              mPolymerSystem_d[4*randomMonomer  ] = xPosMono +dx;
-              mPolymerSystem_d[4*randomMonomer+1] = yPosMono +dy;
-              mPolymerSystem_d[4*randomMonomer+2] = zPosMono +dz;
-              mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-
-              mLatticeTmp_d[((xPosMono + dx     )&LATTICE_XM1_d) + (((yPosMono + dy     )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono + dz) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-              //mLatticeTmp_d[((xPosMono      )&LATTICE_XM1_d) + (((yPosMono      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((zPosMono ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
-
-          }
-          // everything fits -> perform the move - add the information
-          //  mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits
-      }
-      }
+                mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
+                             ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
+                             ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
+                //mLatticeTmp_d[((x0      )&LATTICE_XM1_d) + (((y0      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+            }
+            // everything fits -> perform the move - add the information
+            //  mPolymerSystem_d[4*randomMonomer+3] = MonoProperty & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
+        }
+    }
 }
-
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 {
@@ -1163,9 +1113,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
                         mPolymerSystem_device, mLatticeOut_device,
                         texSpeciesIndicesA, nMonomersSpeciesA
                     );
-                    runSimulationScBFMZeroArraySpeziesA_gpu
+                    kernelSimulationScBFMZeroArraySpecies
                     <<< numblocksSpecies_A, NUMTHREADS >>>(
-                        mPolymerSystem_device, mLatticeTmp_device
+                        mPolymerSystem_device, mLatticeTmp_device,
+                        texSpeciesIndicesA, nMonomersSpeciesA
                     );
                     break;
 
@@ -1181,9 +1132,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU( int32_t nrMCS )
                         mPolymerSystem_device, mLatticeOut_device,
                         texSpeciesIndicesB, nMonomersSpeciesB
                     );
-                    runSimulationScBFMZeroArraySpeziesB_gpu
+                    kernelSimulationScBFMZeroArraySpecies
                     <<< numblocksSpecies_B, NUMTHREADS >>>(
-                        mPolymerSystem_device, mLatticeTmp_device
+                        mPolymerSystem_device, mLatticeTmp_device,
+                        texSpeciesIndicesB, nMonomersSpeciesB
                     );
                     break;
 
@@ -1410,23 +1362,18 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     texSpeciesIndicesB = 0;
 
     //free memory on GPU
-    cudaFree(mLatticeOut_device);
-    cudaFree(mLatticeTmp_device);
-
-    cudaFree(mPolymerSystem_device);
-    cudaFree(MonoInfo_device);
-
-    cudaFree(MonomersSpeziesIdx_A_device);
-    cudaFree(MonomersSpeziesIdx_B_device);
+    cudaFree( mLatticeOut_device          );
+    cudaFree( mLatticeTmp_device          );
+    cudaFree( mPolymerSystem_device       );
+    cudaFree( MonoInfo_device             );
+    cudaFree( MonomersSpeziesIdx_A_device );
+    cudaFree( MonomersSpeziesIdx_B_device );
 
     //free memory on CPU
-    free(mPolymerSystem_host);
-    free(MonoInfo_host);
-
-    free(mLatticeOut_host);
-    free(mLatticeTmp_host);
-
-    free(MonomersSpeziesIdx_A_host);
-    free(MonomersSpeziesIdx_B_host);
-
+    free( mPolymerSystem_host       );
+    free( MonoInfo_host             );
+    free( mLatticeOut_host          );
+    free( mLatticeTmp_host          );
+    free( MonomersSpeziesIdx_A_host );
+    free( MonomersSpeziesIdx_B_host );
 }
