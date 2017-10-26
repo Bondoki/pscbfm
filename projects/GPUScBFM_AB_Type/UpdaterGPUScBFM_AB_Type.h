@@ -72,9 +72,19 @@ private:
     uint32_t   nMonomersPerStarArm;
     uint32_t   nCrosslinker       ;
 
-    uint8_t *  mLattice           ;
-    int32_t *  mPolymerSystem     ;
-    int32_t *  mAttributeSystem   ;
+    /**
+     * Vector of length boxX * boxY * boxZ. Actually only contains 0 if
+     * the cell / lattice point is empty or 1 if it is occupied by a monomer
+     * Suggestion: bitpack it to save 8 times memory and possibly make the
+     *             the reading faster if it is memory bound ???
+     */
+    uint8_t *  mLattice;
+    /**
+     * Actually an array of nMonomers * 3 lengths, stores the lower left front
+     * point of the 2x2x2 monomer inside the lattice.
+     */
+    int32_t *  mPolymerSystem;
+    int32_t *  mAttributeSystem;
 
     //! Holds connectivity information
     struct MonoNNIndex
