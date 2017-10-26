@@ -117,6 +117,12 @@ private:
     uint32_t nMonomersSpeciesA;
     uint32_t nMonomersSpeciesB;
 
+    uint32_t linearizeBoxVectorIndex
+    (
+        uint32_t const & ix,
+        uint32_t const & iy,
+        uint32_t const & iz
+    );
     /**
      * Packs the three given coordinates into 9 bits. Note that 2^9=512. This
      * explains the forbiddenBonds table being 512 entries large!

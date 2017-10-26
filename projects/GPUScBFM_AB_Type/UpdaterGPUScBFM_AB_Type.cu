@@ -38,12 +38,12 @@ __device__ __constant__ intCUDA DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
-__device__ __constant__ uint32_t LATTICE_XM1_d  ;  // mLattice size in X-1
-__device__ __constant__ uint32_t LATTICE_YM1_d  ;  // mLattice size in Y-1
-__device__ __constant__ uint32_t LATTICE_ZM1_d  ;  // mLattice size in Z-1
+__device__ __constant__ uint32_t dcBoxXM1  ;  // mLattice size in X-1
+__device__ __constant__ uint32_t dcBoxYM1  ;  // mLattice size in Y-1
+__device__ __constant__ uint32_t dcBoxZM1  ;  // mLattice size in Z-1
 
-__device__ __constant__ uint32_t LATTICE_XPRO_d ;  // mLattice shift in X
-__device__ __constant__ uint32_t LATTICE_PROXY_d;  // mLattice shift in X*Y
+__device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
+__device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
  * easier and can actually be used as kernel arguments!
@@ -119,6 +119,50 @@ __device__ uintCUDA IdxBondArray_d
            ( ( z & 7 ) << 6 );
 }
 
+template< typename T >
+__device__ __host__ bool isPowerOfTwo( T const & x )
+{
+    return ! ( x == 0 ) && ! ( x & ( x - 1 ) );
+}
+
+uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
+(
+    uint32_t const & ix,
+    uint32_t const & iy,
+    uint32_t const & iz
+)
+{
+    #ifdef NOMAGIC
+        return ( ix % mBoxX ) +
+               ( iy % mBoxY ) * mBoxX +
+               ( iz % mBoxZ ) * mBoxX * mBoxY;
+    #else
+        assert( isPowerOfTwo( mBoxXM1 + 1 ) );
+        assert( isPowerOfTwo( mBoxYM1 + 1 ) );
+        assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+        return   ( ix & mBoxXM1 ) +
+               ( ( iy & mBoxYM1 ) << mBoxXLog2  ) +
+               ( ( iz & mBoxZM1 ) << mBoxXYLog2 );
+    #endif
+}
+
+__device__ uint32_t linearizeBoxVectorIndex
+(
+    uint32_t const & ix,
+    uint32_t const & iy,
+    uint32_t const & iz
+)
+{
+    #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
+        assert( isPowerOfTwo( mBoxXM1 + 1 ) );
+        assert( isPowerOfTwo( mBoxYM1 + 1 ) );
+        assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+    #endif
+    return   ( ix & dcBoxXM1 ) +
+           ( ( iy & dcBoxYM1 ) << dcBoxXLog2  ) +
+           ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
+}
+
 __device__ inline bool checkLattice
 (
     cudaTextureObject_t const texLattice,
@@ -132,56 +176,101 @@ __device__ inline bool checkLattice
 )
 {
     uint8_t test = 0;
+#if 0 // defined( NOMAGIC ) // boh versions successfully tested :)
     /* positions after movement. Why 2 times dx ??? */
-    uint32_t const x1 = ( x0 + dx + dx ) & LATTICE_XM1_d;
-    uint32_t const y1 = ( y0 + dy + dy ) & LATTICE_YM1_d;
-    uint32_t const z1 = ( z0 + dz + dz ) & LATTICE_ZM1_d;
-    uint32_t const x0Abs  = ( x0     ) & LATTICE_XM1_d;
-    uint32_t const x0PDX  = ( x0 + 1 ) & LATTICE_XM1_d;
-    uint32_t const x0MDX  = ( x0 - 1 ) & LATTICE_XM1_d;
-    uint32_t const y0Abs  = ( y0     ) & LATTICE_YM1_d;
-    uint32_t const y0PDY  = ( y0 + 1 ) & LATTICE_YM1_d;
-    uint32_t const y0MDY  = ( y0 - 1 ) & LATTICE_YM1_d;
-    uint32_t const z0Abs  = ( z0     ) & LATTICE_ZM1_d;
-    uint32_t const z0PDZ  = ( z0 + 1 ) & LATTICE_ZM1_d;
-    uint32_t const z0MDZ  = ( z0 - 1 ) & LATTICE_ZM1_d;
+    uint32_t const x1 = ( x0 + dx + dx ) & dcBoxXM1;
+    uint32_t const y1 = ( y0 + dy + dy ) & dcBoxYM1;
+    uint32_t const z1 = ( z0 + dz + dz ) & dcBoxZM1;
+    switch ( axis )
+    {
+        #define TMP_FETCH( x,y,z ) \
+            tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+        case 0: //-+x
+            test = TMP_FETCH( x1, y0 - 1, z0     ) |
+                   TMP_FETCH( x1, y0    , z0     ) |
+                   TMP_FETCH( x1, y0 + 1, z0     ) |
+                   TMP_FETCH( x1, y0 - 1, z0 - 1 ) |
+                   TMP_FETCH( x1, y0    , z0 - 1 ) |
+                   TMP_FETCH( x1, y0 + 1, z0 - 1 ) |
+                   TMP_FETCH( x1, y0 - 1, z0 + 1 ) |
+                   TMP_FETCH( x1, y0    , z0 + 1 ) |
+                   TMP_FETCH( x1, y0 + 1, z0 + 1 );
+            break;
+        case 1: //-+y
+            test = TMP_FETCH( x0 - 1, y1, z0 - 1 ) |
+                   TMP_FETCH( x0    , y1, z0 - 1 ) |
+                   TMP_FETCH( x0 + 1, y1, z0 - 1 ) |
+                   TMP_FETCH( x0 - 1, y1, z0     ) |
+                   TMP_FETCH( x0    , y1, z0     ) |
+                   TMP_FETCH( x0 + 1, y1, z0     ) |
+                   TMP_FETCH( x0 - 1, y1, z0 + 1 ) |
+                   TMP_FETCH( x0    , y1, z0 + 1 ) |
+                   TMP_FETCH( x0 + 1, y1, z0 + 1 );
+            break;
+        case 2: //-+z
+            test = TMP_FETCH( x0 - 1, y0 - 1, z1 ) |
+                   TMP_FETCH( x0    , y0 - 1, z1 ) |
+                   TMP_FETCH( x0 + 1, y0 - 1, z1 ) |
+                   TMP_FETCH( x0 - 1, y0    , z1 ) |
+                   TMP_FETCH( x0    , y0    , z1 ) |
+                   TMP_FETCH( x0 + 1, y0    , z1 ) |
+                   TMP_FETCH( x0 - 1, y0 + 1, z1 ) |
+                   TMP_FETCH( x0    , y0 + 1, z1 ) |
+                   TMP_FETCH( x0 + 1, y0 + 1, z1 );
+            break;
+        #undef TMP_FETCH
+    }
+#else
+    uint32_t const x1     =   ( x0 + dx + dx ) & dcBoxXM1;
+    uint32_t const y1     = ( ( y0 + dy + dy ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const z1     = ( ( z0 + dz + dz ) & dcBoxZM1 ) << dcBoxXYLog2;
+    uint32_t const x0Abs  =   ( x0     ) & dcBoxXM1;
+    uint32_t const x0PDX  =   ( x0 + 1 ) & dcBoxXM1;
+    uint32_t const x0MDX  =   ( x0 - 1 ) & dcBoxXM1;
+    uint32_t const y0Abs  = ( ( y0     ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const y0PDY  = ( ( y0 + 1 ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const y0MDY  = ( ( y0 - 1 ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const z0Abs  = ( ( z0     ) & dcBoxZM1 ) << dcBoxXYLog2;
+    uint32_t const z0PDZ  = ( ( z0 + 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
+    uint32_t const z0MDZ  = ( ( z0 - 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
 
     switch ( axis )
     {
         case 0: //-+x
-            test = tex1Dfetch< uint8_t >( texLattice, x1 + (y0Abs << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0PDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0MDY << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0Abs << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0Abs << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0MDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0PDY << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0MDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + (y0PDY << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) );
+            test = tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
             break;
         case 1: //-+y
-            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y1 << LATTICE_XPRO_d) + (z0MDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y1 << LATTICE_XPRO_d) + (z0Abs << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y1 << LATTICE_XPRO_d) + (z0PDZ << LATTICE_PROXY_d ) );
+            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
             break;
         case 2: //-+z
-            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y0MDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y0Abs << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + (y0PDY << LATTICE_XPRO_d) + (z1 << LATTICE_PROXY_d ) );
+            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
+                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
             break;
     }
+#endif
     return test;
 }
 
@@ -246,9 +335,9 @@ __global__ void kernelSimulationScBFMCheckSpezies
 #ifdef NONPERIODICITY
        /* check whether the new location of the particle would be inside the box
         * if the box is not periodic, if not, then don't move the particle */
-        if ( ! ( 0 <= x0 + dx && x0 + dx < LATTICE_XM1_d &&
-                 0 <= y0 + dy && y0 + dy < LATTICE_YM1_d &&
-                 0 <= z0 + dz && z0 + dz < LATTICE_ZM1_d ) )
+        if ( ! ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
+                 0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
+                 0 <= z0 + dz && z0 + dz < dcBoxZM1 ) )
         {
             return;
         }
@@ -268,13 +357,11 @@ __global__ void kernelSimulationScBFMCheckSpezies
 
         // everything fits -> perform the move - add the information
         // possible move
-        /* ??? can I simply & LATTICE_XM1_d ? this looks like something like
+        /* ??? can I simply & dcBoxXM1 ? this looks like something like
          * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
-         * is only possible if LATTICE_XM1_d+1 is a power of two ... */
+         * is only possible if dcBoxXM1+1 is a power of two ... */
         mPolymerSystem_d[ 4*iMonomer+3 ] = properties | ((random_int<<2)+1);
-        mLatticeTmp_d[  ( ( x0 + dx ) & LATTICE_XM1_d ) +
-                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
+        mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
     }
 }
 
@@ -311,12 +398,8 @@ __global__ void kernelSimulationScBFMPerformSpecies
             //mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
             //mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
             mPolymerSystem_d[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
-            mLattice_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
-                      ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 1;
-            mLattice_d[ ( x0 & LATTICE_XM1_d ) +
-                      ( ( y0 & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                      ( ( z0 & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
+            mLattice_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
+            mLattice_d[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
         }
     }
 }
@@ -352,9 +435,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
             // possible move but not allowed
             if ( ( properties & 3 ) == 1 )
             {
-                mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
-                             ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                             ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
+                mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
                 mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
             }
             else //allowed move with all circumstance
@@ -363,11 +444,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
                 mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
                 mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
                 mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
-
-                mLatticeTmp_d[ ( ( x0 + dx ) & LATTICE_XM1_d ) +
-                             ( ( ( y0 + dy ) & LATTICE_YM1_d ) << LATTICE_XPRO_d ) +
-                             ( ( ( z0 + dz ) & LATTICE_ZM1_d ) << LATTICE_PROXY_d ) ] = 0;
-                //mLatticeTmp_d[((x0      )&LATTICE_XM1_d) + (((y0      )&LATTICE_YM1_d) << LATTICE_XPRO_d) + (((z0 ) & LATTICE_ZM1_d) << LATTICE_PROXY_d)]=0;
+                mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
             }
             // everything fits -> perform the move - add the information
             //  mPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
@@ -595,12 +672,12 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     uint32_t const LATTICE_XPRO  = mBoxXLog2 ;
     uint32_t const LATTICE_PROXY = mBoxXYLog2;
 
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XM1_d, &LATTICE_XM1, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_YM1_d, &LATTICE_YM1, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_ZM1_d, &LATTICE_ZM1, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXM1, &LATTICE_XM1, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxYM1, &LATTICE_YM1, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxZM1, &LATTICE_ZM1, sizeof(uint32_t)));
 
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_XPRO_d, &LATTICE_XPRO, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(LATTICE_PROXY_d, &LATTICE_PROXY, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXLog2, &LATTICE_XPRO, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(dcBoxXYLog2, &LATTICE_PROXY, sizeof(uint32_t)));
 
 
     mLatticeOut_host = (uint8_t *) malloc( LATTICE_X*LATTICE_Y*LATTICE_Z*sizeof(uint8_t));
@@ -905,9 +982,9 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
     //if(!GPUScBFM.StartSimulationGPU())
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
-        mLattice[  ( mPolymerSystem[3*i+0] & mBoxXM1) +
-                 ( ( mPolymerSystem[3*i+1] & mBoxYM1 ) << mBoxXLog2 ) +
-                 ( ( mPolymerSystem[3*i+2] & mBoxZM1 ) << mBoxXYLog2) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( mPolymerSystem[3*i+0],
+                                           mPolymerSystem[3*i+1],
+                                           mPolymerSystem[3*i+2] ) ] = 1;
     }
 }
 
@@ -925,21 +1002,21 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
         int32_t ypos = mPolymerSystem[3*idxMono+1  ];
         int32_t zpos = mPolymerSystem[3*idxMono+2  ];
 
-        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((0 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((0 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((0 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
-        mLattice[((1 + xpos) & mBoxXM1) + (((1 + ypos) & mBoxYM1)<< mBoxXLog2) + (((1 + zpos) & mBoxZM1)<< mBoxXYLog2)]=1;
+        mLattice[ linearizeBoxVectorIndex( xpos  , ypos  , zpos   ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos+1, ypos  , zpos   ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos  , ypos+1, zpos   ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos+1, ypos+1, zpos   ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos  , ypos  , zpos+1 ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos+1, ypos  , zpos+1 ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos  , ypos+1, zpos+1 ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( xpos+1, ypos+1, zpos+1 ) ] = 1;
     }
 
     for ( int x = 0; x < mBoxX; ++x )
     for ( int y = 0; y < mBoxY; ++y )
     for ( int z = 0; z < mBoxZ; ++z )
     {
-       countermLatticeStart += (mLattice[x + (y << mBoxXLog2) + (z << mBoxXYLog2)]==0)? 0 : 1;
+       countermLatticeStart += mLattice[ linearizeBoxVectorIndex( x, y, z ) ] != 0;
        //if (mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)] != 0)
        //cout << x << " " << y << " " << z << "\t" <<  mLattice[x + (y << LATTICE_XPRO) + (z << LATTICE_PROXY)]<< endl;
 
@@ -1067,7 +1144,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     for ( int x = 0; x < mBoxX; ++x )
     for ( int y = 0; y < mBoxY; ++y )
     for ( int z = 0; z < mBoxZ; ++z )
-        dummyTmpCounter += mLatticeTmp_host[ x + ( y << mBoxXLog2 ) + ( z << mBoxXYLog2 ) ] == 0 ? 0 : 1;
+        dummyTmpCounter += mLatticeTmp_host[ linearizeBoxVectorIndex( x, y, z ) ] != 0;
     if ( dummyTmpCounter != 0 )
     {
         std::stringstream msg;
