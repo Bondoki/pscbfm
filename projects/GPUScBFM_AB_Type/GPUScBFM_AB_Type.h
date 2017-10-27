@@ -94,7 +94,7 @@ public:
         mUpdaterGpu.setLatticeSize( mIngredients.getBoxX(),
                                     mIngredients.getBoxY(),
                                     mIngredients.getBoxZ() );
-        mUpdaterGpu.populateLattice();
+        mUpdaterGpu.populateLattice(); /* needs data set by setMonomerCoordinates */
 
          // false-allowed; true-forbidden
         std::cout << "[" << __FILENAME__ << "] copy bondset" << std::endl;

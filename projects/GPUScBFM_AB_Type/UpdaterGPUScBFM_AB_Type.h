@@ -140,6 +140,9 @@ private:
      */
     int IndexBondArray( int const x, int const y, int const z );
 
+    /**
+     * Checks for excluded volume condition and for correctness of all monomer bonds
+     */
     void checkSystem();
 
 public:
@@ -164,6 +167,9 @@ public:
     void setConnectivity( uint32_t monoidx1, uint32_t monoidx2 );
     void setLatticeSize( uint32_t boxX, uint32_t boxY, uint32_t boxZ );
 
+    /**
+     * sets monomer positions given in mPolymerSystem in mLattice to occupied
+     */
     void populateLattice();
     void runSimulationOnGPU( int32_t nrMCS_per_Call );
 

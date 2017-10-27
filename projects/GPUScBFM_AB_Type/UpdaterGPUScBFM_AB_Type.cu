@@ -897,7 +897,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
 
 void UpdaterGPUScBFM_AB_Type::populateLattice()
 {
-    //if(!GPUScBFM.StartSimulationGPU())
+    std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
         mLattice[ linearizeBoxVectorIndex( mPolymerSystem[3*i+0],
@@ -907,15 +907,25 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
 }
 
 /**
- * This isn't really a check, because it changes mLattice
+ * Checks for excluded volume condition and for correctness of all monomer bonds
+ * Beware, it useses and thereby thrashes mLattice. Might be cleaner to declare
+ * as const and malloc and free some temporary buffer, but the time ...
+ * https://randomascii.wordpress.com/2014/12/10/hidden-costs-of-memory-allocation/
+ * "In my tests, for sizes ranging from 8 MB to 32 MB, the cost for a new[]/delete[] pair averaged about 7.5 μs (microseconds), split into ~5.0 μs for the allocation and ~2.5 μs for the free."
+ *  => ~40k cycles
  */
 void UpdaterGPUScBFM_AB_Type::checkSystem()
 {
     /**
+     * Test for excluded volume by setting all lattice points and count the
+     * toal lattice points occupied. If we have overlap this will be smaller
+     * than calculated for zero overlap!
      * mPolymerSystem only stores the lower left front corner of the 2x2x2
      * monomer cube. Use that information to set all 8 cells in the lattice
      * to 'occupied'
      */
+    /*
+     Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( int i = 0; i < nAllMonomers; ++i )
     {
@@ -943,7 +953,8 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
         mLattice[ linearizeBoxVectorIndex( x+1, y+1, z+1 ) ] = 1; /* 7 */
     }
     /* check total occupied cells inside lattice to ensure that the above
-     * transfer went without problems.
+     * transfer went without problems. Note that the number will be smaller
+     * if some monomers overlap!
      * Could also simply reduce mLattice with +, I think, because it only
      * cotains 0 or 1 ??? */
     unsigned nOccupied = 0;
@@ -958,53 +969,44 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
         throw std::runtime_error( msg.str() );
     }
 
-    /* @todo STOPED WORKING HERE !!! */
-
-    std::cout << "check bonds" << std::endl;
-
-    for (int i=0; i < (nAllMonomers); i++)
-    for(unsigned idxNN=0; idxNN < monosNNidx[i]->size; idxNN++)
+    /**
+     * Check bonds i.e. that |dx|<=3 and whether it is allowed by the given
+     * bond set
+     */
+    for ( unsigned i = 0; i < nAllMonomers; ++i )
+    for ( unsigned idxNN = 0; idxNN < monosNNidx[i]->size; ++idxNN )
     {
-         int32_t bond_x = (mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]  ]-mPolymerSystem[3*i  ]);
-         int32_t bond_y = (mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1]-mPolymerSystem[3*i+1]);
-         int32_t bond_z = (mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2]-mPolymerSystem[3*i+2]);
+        /* calculate the bond vector between the neighbor and this particle
+         * neighbor - particle = ( dx, dy, dz ) */
+        int32_t const dx = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+0 ] - mPolymerSystem[ 3*i+0 ];
+        int32_t const dy = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1 ] - mPolymerSystem[ 3*i+1 ];
+        int32_t const dz = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2 ] - mPolymerSystem[ 3*i+2 ];
 
-         if((bond_x > 3) || (bond_x < -3))
-         {
-             std::cout << "Invalid XBond..."<< std::endl;
-             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(i+1)<< " (pos "<< mPolymerSystem[3*i  ] <<","<<mPolymerSystem[3*i+1]<<","<<mPolymerSystem[3*i+2] <<") and " << (monosNNidx[i]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid XBond! Exiting...\n");
-         }
-
-         if((bond_y > 3) || (bond_y < -3))
-         {
-             std::cout << "Invalid YBond..."<< std::endl;
-             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(i+1)<< " (pos "<< mPolymerSystem[3*i  ] <<","<<mPolymerSystem[3*i+1]<<","<<mPolymerSystem[3*i+2] <<") and " << (monosNNidx[i]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid YBond! Exiting...\n");
-
-         }
-
-         if((bond_z > 3) || (bond_z < -3))
-         {
-             std::cout << "Invalid ZBond..."<< std::endl;
-             std::cout << bond_x<< " " << bond_y<< " " << bond_z<< "  between mono: " <<(i+1)<< " (pos "<< mPolymerSystem[3*i  ] <<","<<mPolymerSystem[3*i+1]<<","<<mPolymerSystem[3*i+2] <<") and " << (monosNNidx[i]->bondsMonomerIdx[idxNN]+1) << " (pos "<< mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]  ] <<","<<mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1]<<","+mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2] <<")"<<std::endl;
-             throw std::runtime_error("Invalid ZBond! Exiting...\n");
-         }
-
-
-         //false--erlaubt; true-forbidden
-        if( mForbiddenBonds[IndexBondArray(bond_x, bond_y, bond_z)] )
+        int erroneousAxis = -1;
+        if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
+        if ( ! ( -3 <= dy && dy <= 3 ) ) erroneousAxis = 1;
+        if ( ! ( -3 <= dz && dz <= 3 ) ) erroneousAxis = 2;
+        if ( erroneousAxis >= 0 || mForbiddenBonds[ IndexBondArray( dx, dy, dz ) ] )
         {
-            std::cout << "something wrong with bonds between monomer: " << monosNNidx[i]->bondsMonomerIdx[idxNN]  << " and " << i << std::endl;
-            std::cout << (monosNNidx[i]->bondsMonomerIdx[idxNN]) << "\t x: " << (mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]])   << "\t y:" << mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1]<< "\t z:" << mPolymerSystem[3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2]<< std::endl;
-            std::cout << i << "\t x:" << mPolymerSystem[3*i  ] << "\t y:" << mPolymerSystem[3*i+1]<< "\t z:" << mPolymerSystem[3*i  ]<< std::endl;
-
-            throw std::runtime_error("Bond is NOT allowed! Exiting...\n");
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkSystem] ";
+            if ( erroneousAxis > 0 )
+                msg << "Invalid " << 'X' + erroneousAxis << "Bond: ";
+            if ( mForbiddenBonds[ IndexBondArray( dx, dy, dz ) ] )
+                msg << "This particular bond is forbidden: ";
+            msg << "(" << dx << "," << dy<< "," << dz << ") between monomer "
+                << i+1 << " at (" << mPolymerSystem[3*i+0] << ","
+                                  << mPolymerSystem[3*i+1] << ","
+                                  << mPolymerSystem[3*i+2] << ") and monomer "
+                << monosNNidx[i]->bondsMonomerIdx[idxNN]+1 << " at ("
+                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+0 ] << ","
+                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1 ] << ","
+                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2 ] << ")"
+                << std::endl;
+             throw std::runtime_error( msg.str() );
         }
-
     }
 }
-
 
 void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 (
@@ -1134,27 +1136,24 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
     // copy information from GPU to Host
-    CUDA_CHECK( cudaMemcpy(mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost) );
-    CUDA_CHECK( cudaMemcpy(mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost) );
-
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost ) );
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost ) );
+    for ( uint32_t i= 0 ; i < nAllMonomers; ++i )
     {
-        mPolymerSystem[3*i]=(int32_t) mPolymerSystem_host[4*i];
-        mPolymerSystem[3*i+1]=(int32_t) mPolymerSystem_host[4*i+1];
-        mPolymerSystem[3*i+2]=(int32_t) mPolymerSystem_host[4*i+2];
+        mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
+        mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
+        mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
     }
 
     checkSystem();
 
-    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
     // copy connectivity matrix back from device to host
+    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
     CUDA_CHECK( cudaMemcpy(MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost));
-
     for (uint32_t i=0; i<nAllMonomers; i++)
     {
-
         //if(MonoInfo_host[i].size != monosNNidx[i]->size)
-        if(((mPolymerSystem_host[4*i+3]&224)>>5) != monosNNidx[i]->size)
+        if (  ( ( mPolymerSystem_host[4*i+3] & 224 ) >> 5 ) != monosNNidx[i]->size )
         {
             std::cout << "connectivity error after simulation run" << std::endl;
             std::cout << "mono:" << i << " vs " << (i) << std::endl;
@@ -1163,10 +1162,9 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
 
             throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
         }
-
-        for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
+        for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
         {
-            if(MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u])
+            if ( MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u] )
             {
                 std::cout << "connectivity error after simulation run" << std::endl;
                 std::cout << "mono:" << i << " vs " << (i) << std::endl;
@@ -1177,9 +1175,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
             }
         }
     }
-
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
-
 
     checkSystem();
 
