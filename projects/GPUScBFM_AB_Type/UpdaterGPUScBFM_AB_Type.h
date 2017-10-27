@@ -93,7 +93,7 @@ private:
         uint32_t bondsMonomerIdx[ MAX_CONNECTIVITY ];
     };
 
-    MonoNNIndex ** monosNNidx;
+    MonoNNIndex * mNeighbors;
 
     uint32_t   mBoxX     ;
     uint32_t   mBoxY     ;

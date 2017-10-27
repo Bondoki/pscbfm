@@ -459,9 +459,7 @@ UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
     delete[] mLattice;
     delete[] mPolymerSystem;
     delete[] mAttributeSystem;
-    for ( size_t i = 0; i < nAllMonomers; ++i )
-        delete monosNNidx[i];
-    delete monosNNidx;
+    delete[] mNeighbors;
 
 }
 
@@ -635,22 +633,22 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //MonoInfo_host[i].size = monosNNidx[i]->size;
-        if((monosNNidx[i]->size) > 7)
+        //MonoInfo_host[i].size = mNeighbors[i].size;
+        if((mNeighbors[i].size) > 7)
         {
-            std::cout << "this GPU-model allows max 7 next neighbors but size is " << (monosNNidx[i]->size) << ". Exiting..." << std::endl;
+            std::cout << "this GPU-model allows max 7 next neighbors but size is " << (mNeighbors[i].size) << ". Exiting..." << std::endl;
             throw std::runtime_error( "Limit of connectivity on GPU reached! Exiting...\n" );
         }
 
-        mPolymerSystem_host[4*i+3] |= ((intCUDA)(monosNNidx[i]->size)) << 5;
+        mPolymerSystem_host[4*i+3] |= ((intCUDA)(mNeighbors[i].size)) << 5;
         //cout << "mono:" << i << " vs " << (i) << endl;
-        //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
+        //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
 
         for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
         {
-            MonoInfo_host[i].bondsMonomerIdx[u] = monosNNidx[i]->bondsMonomerIdx[u];
+            MonoInfo_host[i].bondsMonomerIdx[u] = mNeighbors[i].bondsMonomerIdx[u];
 
-            //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << endl;
+            //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << mNeighbors[i].bondsMonomerIdx[u] << endl;
         }
     }
     CUDA_CHECK( cudaMemcpy( MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice ) );
@@ -779,19 +777,21 @@ int UpdaterGPUScBFM_AB_Type::IndexBondArray( int const x, int const y, int const
 void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t rnAllMonomers )
 {
     nAllMonomers = rnAllMonomers;
-    std::cout << "[" << __FILENAME__ << "::setNrOfAllMonomers" << "] used monomers in simulation: " << nAllMonomers << std::endl;
+    #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 20
+        std::cout << "[" << __FILENAME__ << "::setNrOfAllMonomers" << "] "
+            << "used monomers in simulation: " << nAllMonomers << std::endl;
+    #endif
 
-    mAttributeSystem = new int32_t[nAllMonomers];
-    mPolymerSystem   = new int32_t[nAllMonomers*3+1];    /* why +1 ??? */
+    mAttributeSystem = new int32_t[ nAllMonomers ];
+    mPolymerSystem   = new int32_t[ nAllMonomers*3 ];
 
     //idx is reduced by one compared to the file
-    monosNNidx = new MonoNNIndex*[nAllMonomers];
-    for ( uint32_t a = 0; a < nAllMonomers; ++a )
+    mNeighbors = new MonoNNIndex[ nAllMonomers ];
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        monosNNidx[a] = new MonoNNIndex();
-        monosNNidx[a]->size=0;
+        mNeighbors[i].size = 0;
         for ( unsigned o = 0; o < MAX_CONNECTIVITY; ++o )
-            monosNNidx[a]->bondsMonomerIdx[o]=0;
+            mNeighbors[i].bondsMonomerIdx[o] = 0;
     }
 }
 
@@ -842,16 +842,22 @@ void UpdaterGPUScBFM_AB_Type::setNetworkIngredients( uint32_t numPEG, uint32_t n
         //    throw std::runtime_error("nMonomersPerStarArm should be an odd number! Exiting...\n");
 }
 
-void UpdaterGPUScBFM_AB_Type::setConnectivity(uint32_t monoidx1, uint32_t monoidx2)
+void UpdaterGPUScBFM_AB_Type::setConnectivity
+(
+    uint32_t const iMonomer1,
+    uint32_t const iMonomer2
+)
 {
-    monosNNidx[monoidx1]->bondsMonomerIdx[monosNNidx[monoidx1]->size] = monoidx2;
-    //monosNNidx[monoidx2]->bondsMonomerIdx[monosNNidx[monoidx2]->size] = monoidx1;
+    /* the commented parts are correct, but basically redundant, because
+     * the bonds are a non-directional graph */
+    mNeighbors[ iMonomer1 ].bondsMonomerIdx[ mNeighbors[ iMonomer1 ].size ] = iMonomer2;
+    //mNeighbors[ iMonomer2 ].bondsMonomerIdx[ mNeighbors[ iMonomer2 ].size ] = iMonomer1;
 
-    monosNNidx[monoidx1]->size++;
-    //monosNNidx[monoidx2]->size++;
+    ++mNeighbors[ iMonomer1 ].size;
+    //mNeighbors[ iMonomer2 ].size++;
 
-    //if((monosNNidx[monoidx1]->size > MAX_CONNECTIVITY) || (monosNNidx[monoidx2]->size > MAX_CONNECTIVITY))
-    if ( monosNNidx[monoidx1]->size > MAX_CONNECTIVITY )
+    //if((mNeighbors[ iMonomer1 ].size > MAX_CONNECTIVITY) || (mNeighbors[ iMonomer2 ].size > MAX_CONNECTIVITY))
+    if ( mNeighbors[ iMonomer1 ].size > MAX_CONNECTIVITY )
         throw std::runtime_error("MAX_CONNECTIVITY  exceeded! Exiting...\n");
 }
 
@@ -974,13 +980,13 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      * bond set
      */
     for ( unsigned i = 0; i < nAllMonomers; ++i )
-    for ( unsigned idxNN = 0; idxNN < monosNNidx[i]->size; ++idxNN )
+    for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors[i].size; ++iNeighbor )
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        int32_t const dx = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+0 ] - mPolymerSystem[ 3*i+0 ];
-        int32_t const dy = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1 ] - mPolymerSystem[ 3*i+1 ];
-        int32_t const dz = mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2 ] - mPolymerSystem[ 3*i+2 ];
+        int32_t const dx = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] - mPolymerSystem[ 3*i+0 ];
+        int32_t const dy = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] - mPolymerSystem[ 3*i+1 ];
+        int32_t const dz = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] - mPolymerSystem[ 3*i+2 ];
 
         int erroneousAxis = -1;
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
@@ -998,10 +1004,10 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
                 << i+1 << " at (" << mPolymerSystem[3*i+0] << ","
                                   << mPolymerSystem[3*i+1] << ","
                                   << mPolymerSystem[3*i+2] << ") and monomer "
-                << monosNNidx[i]->bondsMonomerIdx[idxNN]+1 << " at ("
-                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+0 ] << ","
-                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+1 ] << ","
-                << mPolymerSystem[ 3*monosNNidx[i]->bondsMonomerIdx[idxNN]+2 ] << ")"
+                << mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 << " at ("
+                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] << ","
+                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] << ","
+                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
         }
@@ -1135,7 +1141,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
-    // copy information from GPU to Host
+    /* copy information / results from GPU to Host. Actually not really
+     * needed, because this is done after each kernel run i.e. the only thing
+     * which should be able to touch the GPU data. */
     CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost ) );
     CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost ) );
     for ( uint32_t i= 0 ; i < nAllMonomers; ++i )
@@ -1144,40 +1152,37 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
         mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
         mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
     }
-
     checkSystem();
 
-    // copy connectivity matrix back from device to host
-    int sizeMonoInfo = nAllMonomers * sizeof(MonoInfo);
-    CUDA_CHECK( cudaMemcpy(MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost));
-    for (uint32_t i=0; i<nAllMonomers; i++)
+    /* check whether connectivities on GPU got corrupted */
+    int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
+    CUDA_CHECK( cudaMemcpy( MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost ) );
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //if(MonoInfo_host[i].size != monosNNidx[i]->size)
-        if (  ( ( mPolymerSystem_host[4*i+3] & 224 ) >> 5 ) != monosNNidx[i]->size )
+        //if(MonoInfo_host[i].size != mNeighbors[i].size)
+        if (  ( ( mPolymerSystem_host[4*i+3] & 224 ) >> 5 ) != mNeighbors[i].size )
         {
             std::cout << "connectivity error after simulation run" << std::endl;
             std::cout << "mono:" << i << " vs " << (i) << std::endl;
-            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << monosNNidx[i]->size << endl;
-            std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << monosNNidx[i]->size << std::endl;
+            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
+            std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << mNeighbors[i].size << std::endl;
 
             throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
         }
         for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
         {
-            if ( MonoInfo_host[i].bondsMonomerIdx[u] != monosNNidx[i]->bondsMonomerIdx[u] )
+            if ( MonoInfo_host[i].bondsMonomerIdx[u] != mNeighbors[i].bondsMonomerIdx[u] )
             {
                 std::cout << "connectivity error after simulation run" << std::endl;
                 std::cout << "mono:" << i << " vs " << (i) << std::endl;
 
-                std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << monosNNidx[i]->bondsMonomerIdx[u] << std::endl;
+                std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << mNeighbors[i].bondsMonomerIdx[u] << std::endl;
 
                 throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
             }
         }
     }
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
-
-    checkSystem();
 
     //unbind texture reference to free resource
     cudaUnbindTexture( texPolymerAndMonomerIsEvenAndOnXRef );

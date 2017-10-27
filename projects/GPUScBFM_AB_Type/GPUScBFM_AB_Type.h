@@ -67,7 +67,6 @@ public:
     inline void initialize()
     {
         /* Forward needed parameters to the GPU updater */
-        mUpdaterGpu.setNrOfAllMonomers( mIngredients.getMolecules().size() );
         mUpdaterGpu.setPeriodicity( mIngredients.isPeriodicX(),
                                     mIngredients.isPeriodicY(),
                                     mIngredients.isPeriodicZ() );
@@ -79,6 +78,7 @@ public:
                                            mIngredients.getNrOfCrosslinker() );
 
         /* copy monomer positions, attributes and connectivity of all monomers */
+        mUpdaterGpu.setNrOfAllMonomers( mIngredients.getMolecules().size() );
         for ( size_t i = 0u; i < mIngredients.getMolecules().size(); ++i )
         {
             mUpdaterGpu.setMonomerCoordinates( i, molecules[i].getX(),
@@ -94,7 +94,7 @@ public:
         mUpdaterGpu.setLatticeSize( mIngredients.getBoxX(),
                                     mIngredients.getBoxY(),
                                     mIngredients.getBoxZ() );
-        mUpdaterGpu.populateLattice(); /* needs data set by setMonomerCoordinates */
+        mUpdaterGpu.populateLattice(); /* needs data set by setMonomerCoordinates. Is this actually needed ??? */
 
          // false-allowed; true-forbidden
         std::cout << "[" << __FILENAME__ << "] copy bondset" << std::endl;
