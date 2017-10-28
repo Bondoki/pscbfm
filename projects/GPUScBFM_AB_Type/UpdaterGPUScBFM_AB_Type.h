@@ -134,11 +134,6 @@ private:
         uint32_t const & iy,
         uint32_t const & iz
     );
-    /**
-     * Packs the three given coordinates into 9 bits. Note that 2^9=512. This
-     * explains the forbiddenBonds table being 512 entries large!
-     */
-    int IndexBondArray( int const x, int const y, int const z );
 
     /**
      * Checks for excluded volume condition and for correctness of all monomer bonds
@@ -154,7 +149,7 @@ public:
     void cleanup();
 
     /* setter methods */
-    inline void copyBondSet( int dx, int dy, int dz, bool bondForbidden ){ mForbiddenBonds[ IndexBondArray(dx,dy,dz) ] = bondForbidden; }
+    void copyBondSet( int dx, int dy, int dz, bool bondForbidden );
     inline void setAttribute( uint32_t i, int32_t attribute ){ mAttributeSystem[i] = attribute; }
     void setNrOfAllMonomers( uint32_t nAllMonomers );
     void setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL );

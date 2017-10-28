@@ -99,11 +99,12 @@ public:
          // false-allowed; true-forbidden
         std::cout << "[" << __FILENAME__ << "] copy bondset" << std::endl;
         /* maximum of (expected!!!) bond length in one dimension. Should be
-         * queryable or there should be a better way to copy the bond set. */
+         * queryable or there should be a better way to copy the bond set.
+         * Note that supported range is [-4,3] */
         int const maxBondLength = 4;
-        for ( int dx = -maxBondLength; dx <= maxBondLength; ++dx )
-        for ( int dy = -maxBondLength; dy <= maxBondLength; ++dy )
-        for ( int dz = -maxBondLength; dz <= maxBondLength; ++dz )
+        for ( int dx = -maxBondLength; dx < maxBondLength; ++dx )
+        for ( int dy = -maxBondLength; dy < maxBondLength; ++dy )
+        for ( int dz = -maxBondLength; dz < maxBondLength; ++dz )
         {
             /* !!! The negation is confusing, again there should be a better way to copy the bond set */
             mUpdaterGpu.copyBondSet( dx, dy, dz, ! mIngredients.getBondset().isValid( VectorInt3( dx, dy, dz ) ) );

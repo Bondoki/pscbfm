@@ -107,18 +107,6 @@ __device__ uint32_t hash( uint32_t a )
     return a;
 }
 
-__device__ uintCUDA IdxBondArray_d
-(
-    intCUDA const x,
-    intCUDA const y,
-    intCUDA const z
-)
-{
-    return   ( x & 7 ) +
-           ( ( y & 7 ) << 3 ) +
-           ( ( z & 7 ) << 6 );
-}
-
 template< typename T >
 __device__ __host__ bool isPowerOfTwo( T const & x )
 {
@@ -274,6 +262,23 @@ __device__ inline bool checkLattice
     return test;
 }
 
+__device__ __host__ uintCUDA linearizeBondVectorIndex
+(
+    intCUDA const x,
+    intCUDA const y,
+    intCUDA const z
+)
+{
+    /* Just like for normal integers we clip the range to go more down than up
+     * i.e. [-127 ,128] or in this case [-4,3] */
+    assert( -4 <= x && x < 4 );
+    assert( -4 <= y && y < 4 );
+    assert( -4 <= z && z < 4 );
+    return   ( x & 7 /* 0b111 */ ) +
+           ( ( y & 7 /* 0b111 */ ) << 3 ) +
+           ( ( z & 7 /* 0b111 */ ) << 6 );
+}
+
 /**
  * @param[in] rn a random number used as a kind of seed for the RNG
  * @param[in] nMonomers number of max. monomers to work on, this is for
@@ -294,7 +299,7 @@ __device__ inline bool checkLattice
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
-__global__ void kernelSimulationScBFMCheckSpezies
+__global__ void kernelSimulationScBFMCheckSpecies
 (
     intCUDA           * const mPolymerSystem_d ,
     uint8_t           * const mLatticeTmp_d    ,
@@ -326,8 +331,7 @@ __global__ void kernelSimulationScBFMCheckSpezies
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         uintCUDA const random_int = hash( hash( linId ) ^ rn ) % 6;
 
-         //select random direction. !!! That table is kinda magic. there might be a better way ... E.g. using bitmasking. Also, what is with 0 in one direction ??? There is no way to e.g. get (0,1,-1) ... ???
-         //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+         /* select random direction. Do this with bitmasking instead of lookup ??? */
         intCUDA const dx = DXTable_d[ random_int ];
         intCUDA const dy = DYTable_d[ random_int ];
         intCUDA const dz = DZTable_d[ random_int ];
@@ -342,13 +346,15 @@ __global__ void kernelSimulationScBFMCheckSpezies
             return;
         }
 #endif
-        const unsigned nextNeigborSize = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
-        for ( unsigned u = 0; u < nextNeigborSize; ++u )
+        /* check whether the new position would result in invalid bonds
+         * between this monomer and its neighbors */
+        unsigned const nNeighbors = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
+        for ( unsigned iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
         {
-            intCUDA const nN_X = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+0 );
-            intCUDA const nN_Y = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+1 );
-            intCUDA const nN_Z = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[iMonomer].bondsMonomerIdx[u]+2 );
-            if ( dpForbiddenBonds[ IdxBondArray_d( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
+            intCUDA const nN_X = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+0 );
+            intCUDA const nN_Y = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+1 );
+            intCUDA const nN_Z = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+2 );
+            if ( dpForbiddenBonds[ linearizeBondVectorIndex( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
                 return;
         }
 
@@ -752,26 +758,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     checkSystem();
 }
 
-/**
- * !!! Problems:
- *  Note that this simply bitmasks negative values, e.g. x=-4 = 0xfffffffc
- *  Note that 0xfc = 1111 1100b and &7 -> 100. Vice-versa 4 = 100b ...
- *   => this clashes !!! As a simple runtime test shows, both are indeed used!
- */
-int UpdaterGPUScBFM_AB_Type::IndexBondArray( int const x, int const y, int const z )
+
+void UpdaterGPUScBFM_AB_Type::copyBondSet
+( int dx, int dy, int dz, bool bondForbidden )
 {
-#ifndef NDEBUG2
-    if ( x == -4 || x == 4 )
-    {
-        /* Found negative x=-4 = fffffffc */
-        std::cout << "[" << __FILENAME__ << "::IndexBondArray] +-4 x="
-                  << x << " = " << std::hex << x << std::dec << std::endl;
-    }
-#endif
-    /* 7 == 0b111, i.e. truncate the lowest 3 bits */
-    return   ( x & 7 ) +
-           ( ( y & 7 ) << 3 ) +
-           ( ( z & 7 ) << 6 );
+    mForbiddenBonds[ linearizeBondVectorIndex(dx,dy,dz) ] = bondForbidden;
 }
 
 void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t rnAllMonomers )
@@ -992,13 +983,13 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
         if ( ! ( -3 <= dy && dy <= 3 ) ) erroneousAxis = 1;
         if ( ! ( -3 <= dz && dz <= 3 ) ) erroneousAxis = 2;
-        if ( erroneousAxis >= 0 || mForbiddenBonds[ IndexBondArray( dx, dy, dz ) ] )
+        if ( erroneousAxis >= 0 || mForbiddenBonds[ linearizeBondVectorIndex( dx, dy, dz ) ] )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::checkSystem] ";
             if ( erroneousAxis > 0 )
                 msg << "Invalid " << 'X' + erroneousAxis << "Bond: ";
-            if ( mForbiddenBonds[ IndexBondArray( dx, dy, dz ) ] )
+            if ( mForbiddenBonds[ linearizeBondVectorIndex( dx, dy, dz ) ] )
                 msg << "This particular bond is forbidden: ";
             msg << "(" << dx << "," << dy<< "," << dz << ") between monomer "
                 << i+1 << " at (" << mPolymerSystem[3*i+0] << ","
@@ -1030,7 +1021,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             switch ( randomNumbers.r250_rand32() % 2 )
             {
                 case 0:  // run Spezies_A monomers
-                    kernelSimulationScBFMCheckSpezies
+                    kernelSimulationScBFMCheckSpecies
                     <<< numblocksSpecies_A, NUMTHREADS >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         MonoInfo_device, texSpeciesIndicesA,
@@ -1051,7 +1042,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     break;
 
                 case 1: // run Spezies_B monomers
-                    kernelSimulationScBFMCheckSpezies
+                    kernelSimulationScBFMCheckSpecies
                     <<< numblocksSpecies_B, NUMTHREADS >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         MonoInfo_device, texSpeciesIndicesB,
