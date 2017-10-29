@@ -67,7 +67,7 @@ __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
  *  nnr ... number of neighbors, this will get populated from LeMonADE's
  *          get get
  */
-texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > texPolymerAndMonomerIsEvenAndOnXRef;
+texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > mPolymerSystem_texture;
 
 cudaTextureObject_t texLatticeRefOut = 0;
 cudaTextureObject_t texLatticeTmpRef = 0;
@@ -151,29 +151,51 @@ __device__ uint32_t linearizeBoxVectorIndex
            ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
 }
 
-__device__ inline bool checkLattice
+/**
+ * Checks the 3x3 grid one in front of the new position in the direction of the
+ * move given by axis
+ *
+ * @verbatim
+ *           ____________
+ *         .'  .'  .'  .'|
+ *        +---+---+---+  +     y
+ *        | 6 | 7 | 8 |.'|     ^ z
+ *        +---+---+---+  +     |/
+ *        | 3/| 4/| 5 |.'|     +--> x
+ *        +-/-+-/-+---+  +
+ *   0 -> |+---+1/| 2 |.'  ^          ^
+ *        /|/-/|/-+---+   /          / axis direction +z (axis = 0b101)
+ *       / +-/-+         /  2 (*dz) /                              ++|
+ *      +---+ /         /                                         /  +/-
+ *      |/X |/         L                                        xyz
+ *      +---+  <- X ... current position of the monomer
+ * @endverbatim
+ *
+ * @param[in] axis +-x, +-y, +-z in that order from 0 to 5, or put in another
+ *                 equivalent way: the lowest bit specifies +(1) or -(0) and the
+ *                 Bit 2 and 1 specify the axis: 0b00=x, 0b01=y, 0b10=z
+ */
+__device__ inline bool checkFront
 (
-    cudaTextureObject_t const texLattice,
-    intCUDA  const x0,
-    intCUDA  const y0,
-    intCUDA  const z0,
-    intCUDA  const dx,
-    intCUDA  const dy,
-    intCUDA  const dz,
-    uintCUDA const axis
+    cudaTextureObject_t const & texLattice,
+    intCUDA             const & x0        ,
+    intCUDA             const & y0        ,
+    intCUDA             const & z0        ,
+    intCUDA             const & axis
 )
 {
     uint8_t test = 0;
-#if 0 // defined( NOMAGIC ) // boh versions successfully tested :)
-    /* positions after movement. Why 2 times dx ??? */
-    uint32_t const x1 = ( x0 + dx + dx ) & dcBoxXM1;
-    uint32_t const y1 = ( y0 + dy + dy ) & dcBoxYM1;
-    uint32_t const z1 = ( z0 + dz + dz ) & dcBoxZM1;
-    switch ( axis )
+#if 0 // defined( NOMAGIC ) // both versions successfully tested :)
+    intCUDA const shift = 4*(axis & 1)-2;
+    /* reduce branching by parameterizing the access axis!!! But that
+     * makes the memory accesses more random again */
+    switch ( axis >> 1 )
     {
         #define TMP_FETCH( x,y,z ) \
             tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
         case 0: //-+x
+        {
+            uint32_t const x1 = ( x0 + shift ) & dcBoxXM1;
             test = TMP_FETCH( x1, y0 - 1, z0     ) |
                    TMP_FETCH( x1, y0    , z0     ) |
                    TMP_FETCH( x1, y0 + 1, z0     ) |
@@ -184,7 +206,10 @@ __device__ inline bool checkLattice
                    TMP_FETCH( x1, y0    , z0 + 1 ) |
                    TMP_FETCH( x1, y0 + 1, z0 + 1 );
             break;
+        }
         case 1: //-+y
+        {
+            uint32_t const y1 = ( y0 + shift ) & dcBoxYM1;
             test = TMP_FETCH( x0 - 1, y1, z0 - 1 ) |
                    TMP_FETCH( x0    , y1, z0 - 1 ) |
                    TMP_FETCH( x0 + 1, y1, z0 - 1 ) |
@@ -195,23 +220,35 @@ __device__ inline bool checkLattice
                    TMP_FETCH( x0    , y1, z0 + 1 ) |
                    TMP_FETCH( x0 + 1, y1, z0 + 1 );
             break;
+        }
         case 2: //-+z
-            test = TMP_FETCH( x0 - 1, y0 - 1, z1 ) |
-                   TMP_FETCH( x0    , y0 - 1, z1 ) |
-                   TMP_FETCH( x0 + 1, y0 - 1, z1 ) |
-                   TMP_FETCH( x0 - 1, y0    , z1 ) |
-                   TMP_FETCH( x0    , y0    , z1 ) |
-                   TMP_FETCH( x0 + 1, y0    , z1 ) |
-                   TMP_FETCH( x0 - 1, y0 + 1, z1 ) |
-                   TMP_FETCH( x0    , y0 + 1, z1 ) |
-                   TMP_FETCH( x0 + 1, y0 + 1, z1 );
+        {
+            /**
+             * @verbatim
+             *   +---+---+---+  y
+             *   | 6 | 7 | 8 |  ^ z
+             *   +---+---+---+  |/
+             *   | 3 | 4 | 5 |  +--> x
+             *   +---+---+---+
+             *   | 0 | 1 | 2 |
+             *   +---+---+---+
+             * @endverbatim
+             */
+            uint32_t const z1 = ( z0 + shift ) & dcBoxZM1;
+            test = TMP_FETCH( x0 - 1, y0 - 1, z1 ) | /* 0 */
+                   TMP_FETCH( x0    , y0 - 1, z1 ) | /* 1 */
+                   TMP_FETCH( x0 + 1, y0 - 1, z1 ) | /* 2 */
+                   TMP_FETCH( x0 - 1, y0    , z1 ) | /* 3 */
+                   TMP_FETCH( x0    , y0    , z1 ) | /* 4 */
+                   TMP_FETCH( x0 + 1, y0    , z1 ) | /* 5 */
+                   TMP_FETCH( x0 - 1, y0 + 1, z1 ) | /* 6 */
+                   TMP_FETCH( x0    , y0 + 1, z1 ) | /* 7 */
+                   TMP_FETCH( x0 + 1, y0 + 1, z1 );  /* 8 */
             break;
+        }
         #undef TMP_FETCH
     }
 #else
-    uint32_t const x1     =   ( x0 + dx + dx ) & dcBoxXM1;
-    uint32_t const y1     = ( ( y0 + dy + dy ) & dcBoxYM1 ) << dcBoxXLog2;
-    uint32_t const z1     = ( ( z0 + dz + dz ) & dcBoxZM1 ) << dcBoxXYLog2;
     uint32_t const x0Abs  =   ( x0     ) & dcBoxXM1;
     uint32_t const x0PDX  =   ( x0 + 1 ) & dcBoxXM1;
     uint32_t const x0MDX  =   ( x0 - 1 ) & dcBoxXM1;
@@ -222,9 +259,14 @@ __device__ inline bool checkLattice
     uint32_t const z0PDZ  = ( ( z0 + 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
     uint32_t const z0MDZ  = ( ( z0 - 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
 
-    switch ( axis )
+    intCUDA const dx = DXTable_d[ axis ];   // 2*axis-1
+    intCUDA const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
+    intCUDA const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
+    switch ( axis >> 1 )
     {
         case 0: //-+x
+        {
+            uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
             test = tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
                    tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
                    tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
@@ -235,7 +277,10 @@ __device__ inline bool checkLattice
                    tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
                    tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
             break;
+        }
         case 1: //-+y
+        {
+            uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
             test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
                    tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
                    tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
@@ -246,7 +291,10 @@ __device__ inline bool checkLattice
                    tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
                    tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
             break;
+        }
         case 2: //-+z
+        {
+            uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
             test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
                    tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
                    tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
@@ -257,6 +305,7 @@ __device__ inline bool checkLattice
                    tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
                    tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
             break;
+        }
     }
 #endif
     return test;
@@ -271,15 +320,23 @@ __device__ __host__ uintCUDA linearizeBondVectorIndex
 {
     /* Just like for normal integers we clip the range to go more down than up
      * i.e. [-127 ,128] or in this case [-4,3] */
-    assert( -4 <= x && x < 4 );
-    assert( -4 <= y && y < 4 );
-    assert( -4 <= z && z < 4 );
+    assert( ( x & 7 ) == x );
+    assert( ( y & 7 ) == y );
+    assert( ( z & 7 ) == z );
     return   ( x & 7 /* 0b111 */ ) +
            ( ( y & 7 /* 0b111 */ ) << 3 ) +
            ( ( z & 7 /* 0b111 */ ) << 6 );
 }
 
 /**
+ * Goes over all monomers of a species given specified by texSpeciesIndices
+ * draws a random direction for them and checks whether that move is possible
+ * with the box size and periodicity as well as the monomers at the target
+ * location (excluded volume) and the new bond lengths to all neighbors.
+ * If so, then the new position is set to 1 in dpLatticeTmp and encode the
+ * possible movement direction in the property tag of the corresponding monomer
+ * in dpPolymerSystem.
+ *
  * @param[in] rn a random number used as a kind of seed for the RNG
  * @param[in] nMonomers number of max. monomers to work on, this is for
  *            filtering out excessive threads and was prior a __constant__
@@ -301,172 +358,165 @@ __device__ __host__ uintCUDA linearizeBondVectorIndex
  */
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    intCUDA           * const mPolymerSystem_d ,
-    uint8_t           * const mLatticeTmp_d    ,
-    MonoInfo          * const MonoInfo_d       ,
+    intCUDA           * const dpPolymerSystem  ,
+    uint8_t           * const dpLatticeTmp     ,
+    MonoInfo          * const dpMonoInfo       ,
     cudaTextureObject_t const texSpeciesIndices,
     uint32_t            const nMonomers        ,
-    uint32_t            const rn               ,
+    uint32_t            const rSeed            ,
     cudaTextureObject_t const texLatticeRefOut
 )
 {
-    int linId = blockIdx.x * blockDim.x + threadIdx.x;
-    /* might be more readable to just return if the thread is masked ???
-     * if ( ! ( linId < nMonomers ) )
-     *     return;
-     * I think it only works on newer CUDA versions ??? else the whole warp
-     * might quit???
-     */
-    if ( linId < nMonomers )
-    {
-        // "select random monomer" ??? I don't see why this is random? texSpeciesIndices is not randomized!
-        uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
-        /* isn't this basically an array of structs where a struct of arrays
-         * should be faster ??? */
-        intCUDA  const x0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
-        intCUDA  const y0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
-        intCUDA  const z0         = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
-        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
+    int const linId = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( linId >= nMonomers )
+        return;
 
-        //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-        uintCUDA const random_int = hash( hash( linId ) ^ rn ) % 6;
+    // "select random monomer" ??? I don't see why this is random? texSpeciesIndices is not randomized!
+    uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+    /* isn't this basically an array of structs where a struct of arrays
+     * should be faster ??? */
+    intCUDA  const x0         = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+0 );
+    intCUDA  const y0         = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
+    intCUDA  const z0         = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
+    intCUDA  const properties = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+3 );
 
-         /* select random direction. Do this with bitmasking instead of lookup ??? */
-        intCUDA const dx = DXTable_d[ random_int ];
-        intCUDA const dy = DYTable_d[ random_int ];
-        intCUDA const dz = DZTable_d[ random_int ];
+    //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
+    uintCUDA const random_int = hash( hash( linId ) ^ rSeed ) % 6;
+
+     /* select random direction. Do this with bitmasking instead of lookup ??? */
+    intCUDA const dx = DXTable_d[ random_int ];
+    intCUDA const dy = DYTable_d[ random_int ];
+    intCUDA const dz = DZTable_d[ random_int ];
 
 #ifdef NONPERIODICITY
-       /* check whether the new location of the particle would be inside the box
-        * if the box is not periodic, if not, then don't move the particle */
-        if ( ! ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
-                 0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
-                 0 <= z0 + dz && z0 + dz < dcBoxZM1 ) )
-        {
-            return;
-        }
-#endif
-        /* check whether the new position would result in invalid bonds
-         * between this monomer and its neighbors */
-        unsigned const nNeighbors = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
-        for ( unsigned iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
-        {
-            intCUDA const nN_X = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+0 );
-            intCUDA const nN_Y = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+1 );
-            intCUDA const nN_Z = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*MonoInfo_d[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+2 );
-            if ( dpForbiddenBonds[ linearizeBondVectorIndex( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
-                return;
-        }
-
-        if ( checkLattice( texLatticeRefOut, x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
-            return;
-
-        // everything fits -> perform the move - add the information
-        // possible move
-        /* ??? can I simply & dcBoxXM1 ? this looks like something like
-         * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
-         * is only possible if dcBoxXM1+1 is a power of two ... */
-        mPolymerSystem_d[ 4*iMonomer+3 ] = properties | ((random_int<<2)+1);
-        mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
+   /* check whether the new location of the particle would be inside the box
+    * if the box is not periodic, if not, then don't move the particle */
+    if ( ! ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
+             0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
+             0 <= z0 + dz && z0 + dz < dcBoxZM1 ) )
+    {
+        return;
     }
+#endif
+    /* check whether the new position would result in invalid bonds
+     * between this monomer and its neighbors */
+    unsigned const nNeighbors = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
+    for ( unsigned iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
+    {
+        intCUDA const nN_X = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+0 );
+        intCUDA const nN_Y = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+1 );
+        intCUDA const nN_Z = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+2 );
+        if ( dpForbiddenBonds[ linearizeBondVectorIndex( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
+            return;
+    }
+
+    if ( checkFront( texLatticeRefOut, x0, y0, z0, random_int ) )
+        return;
+
+    // everything fits -> perform the move - add the information
+    // possible move
+    /* ??? can I simply & dcBoxXM1 ? this looks like something like
+     * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
+     * is only possible if dcBoxXM1+1 is a power of two ... */
+    /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
+     * texture used above. Won't this result in read-after-write race-conditions?
+     * Then again the written / changed bits are never used in the above code ... */
+    dpPolymerSystem[ 4*iMonomer+3 ] = properties | ((random_int<<2)+1);
+    dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
 }
 
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    intCUDA             * const mPolymerSystem_d ,
-    uint8_t             * const mLattice_d       ,
+    intCUDA             * const dpPolymerSystem ,
+    uint8_t             * const dpLattice       ,
     cudaTextureObject_t   const texSpeciesIndices,
     uint32_t              const nMonomers        ,
     cudaTextureObject_t   const texLatticeTmpRef
 )
 {
     int const linId = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( linId < nMonomers )
-    {
-        uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
-        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
-        if ( properties & 1 != 0 )    // possible move
-        {
-            intCUDA  const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
-            intCUDA  const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
-            intCUDA  const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
-            uintCUDA const random_int = ( properties & 28 ) >> 2; // 28 == 0b11100
+    if ( linId >= nMonomers )
+        return;
 
-            intCUDA const dx = DXTable_d[ random_int ];
-            intCUDA const dy = DYTable_d[ random_int ];
-            intCUDA const dz = DZTable_d[ random_int ];
+    uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+    intCUDA  const properties = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+3 );
+    if ( ( properties & 1 ) == 0 )    // impossible move
+        return;
+    intCUDA  const x0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+0 );
+    intCUDA  const y0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
+    intCUDA  const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
+    uintCUDA const random_int = ( properties & 28 ) >> 2; // 28 == 0b11100
 
-            if ( checkLattice( texLatticeTmpRef, x0, y0, z0, dx, dy, dz, random_int >> 1 ) )
-                return;
+    intCUDA const dx = DXTable_d[ random_int ];
+    intCUDA const dy = DYTable_d[ random_int ];
+    intCUDA const dz = DZTable_d[ random_int ];
 
-            // everything fits -> perform the move - add the information
-            //mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
-            //mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
-            //mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
-            mPolymerSystem_d[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
-            mLattice_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
-            mLattice_d[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
-        }
-    }
+    if ( checkFront( texLatticeTmpRef, x0, y0, z0, random_int ) )
+        return;
+
+    // everything fits -> perform the move - add the information
+    //mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
+    //mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
+    //mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
+    dpPolymerSystem[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
+    dpLattice[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
+    dpLattice[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
 }
 
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
-    intCUDA             * const mPolymerSystem_d ,
-    uint8_t             * const mLatticeTmp_d    ,
+    intCUDA             * const dpPolymerSystem ,
+    uint8_t             * const dpLatticeTmp    ,
     cudaTextureObject_t   const texSpeciesIndices,
     uint32_t              const nMonomers
 )
 {
-    int linId = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( linId < nMonomers )
+    int const linId = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( linId >= nMonomers )
+        return;
+
+    uint32_t const iMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
+    intCUDA  const properties = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+3 );
+
+    if ( ( properties & 3 ) == 0 )    // impossible move
+        return;
+
+    intCUDA const x0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+0 );
+    intCUDA const y0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
+    intCUDA const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
+
+    //select random direction
+    uintCUDA const random_int = ( properties & 28 ) >> 2;
+
+    //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+    intCUDA const dx = DXTable_d[ random_int ];
+    intCUDA const dy = DYTable_d[ random_int ];
+    intCUDA const dz = DZTable_d[ random_int ];
+
+    // possible move but not allowed
+    if ( ( properties & 3 ) == 1 )
     {
-        uint32_t const iMonomer = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
-        intCUDA  const properties = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+3 );
-
-        if ( ( properties & 3 ) != 0 )    //possible move
-        {
-            intCUDA const x0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+0 );
-            intCUDA const y0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+1 );
-            intCUDA const z0 = tex1Dfetch( texPolymerAndMonomerIsEvenAndOnXRef, 4*iMonomer+2 );
-
-            //select random direction
-            uintCUDA const random_int = ( properties & 28 ) >> 2;
-
-            //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-            intCUDA const dx = DXTable_d[ random_int ];
-            intCUDA const dy = DYTable_d[ random_int ];
-            intCUDA const dz = DZTable_d[ random_int ];
-
-            // possible move but not allowed
-            if ( ( properties & 3 ) == 1 )
-            {
-                mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
-                mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
-            }
-            else //allowed move with all circumstance
-            {
-                mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
-                mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
-                mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
-                mPolymerSystem_d[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
-                mLatticeTmp_d[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
-            }
-            // everything fits -> perform the move - add the information
-            //  mPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
-        }
+        dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
+        dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
     }
+    else //allowed move with all circumstance
+    {
+        dpPolymerSystem[ 4*iMonomer+0 ] = x0 + dx;
+        dpPolymerSystem[ 4*iMonomer+1 ] = y0 + dy;
+        dpPolymerSystem[ 4*iMonomer+2 ] = z0 + dz;
+        dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
+        dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
+    }
+    // everything fits -> perform the move - add the information
+    //  mPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
 }
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 {
-    std::cout << "[" << __FILENAME__ << "::~UpdaterGPUScBFM_AB_Type" << "] destructor" << std::endl;
-
     delete[] mLattice;
     delete[] mPolymerSystem;
     delete[] mAttributeSystem;
     delete[] mNeighbors;
-
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
@@ -690,7 +740,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem_host, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
 
     /* bind textures */
-    cudaBindTexture( 0, texPolymerAndMonomerIsEvenAndOnXRef, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
+    cudaBindTexture( 0, mPolymerSystem_texture, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
 
     /* new with texture object... they said it would be easier -.- */
     cudaResourceDesc resDescA;
@@ -773,35 +823,29 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t rnAllMonomers )
     }
 }
 
-void UpdaterGPUScBFM_AB_Type::setPeriodicity(bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ)
+void UpdaterGPUScBFM_AB_Type::setPeriodicity
+(
+    bool const isPeriodicX,
+    bool const isPeriodicY,
+    bool const isPeriodicZ
+)
 {
-    //check if we are using periodic boundary condition and the simulations are do so
-#ifdef NONPERIODICITY
-    if((isPeriodicX == true) || (isPeriodicY == true) || (isPeriodicZ == true) )
-    {
-        std::stringstream errormessage;
-        errormessage<<"Simulation is intended to use NON-PERIODIC BOUNDARY conditions.\n";
-        errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
-        errormessage<<"In X:"<<isPeriodicX<<"\n";
-        errormessage<<"In Y:"<<isPeriodicY<<"\n";
-        errormessage<<"In Z:"<<isPeriodicZ<<"\n";
-        errormessage<<"Logical Error! Exiting...\n";
-        throw std::runtime_error(errormessage.str());
-    }
-#else
-    if((isPeriodicX == false) || (isPeriodicY == false) || (isPeriodicZ == false) )
-    {
-        std::stringstream errormessage;
-        errormessage<<"Simulation is intended to use PERIODIC BOUNDARY conditions.\n";
-        errormessage<<"But in BFM-File the PERIODICITY is set to:\n";
-        errormessage<<"In X:"<<isPeriodicX<<"\n";
-        errormessage<<"In Y:"<<isPeriodicY<<"\n";
-        errormessage<<"In Z:"<<isPeriodicZ<<"\n";
-        errormessage<<"Logical Error! Exiting...\n";
-        throw std::runtime_error(errormessage.str());
-    }
-#endif
+    /* Compare inputs to hardcoded values. No ability yet to adjust dynamically */
+    std::stringstream msg;
+    msg << "[" << __FILENAME__ << "::setPeriodicity" << "] "
+        << "Simulation is intended to use completely "
+    #ifdef NONPERIODICITY
+        << "non-"
+    #endif
+        << "periodic boundary conditions, but setPeriodicity was called with "
+        << "(" << isPeriodicX << "," << isPeriodicY << "," << isPeriodicZ << ")\n";
 
+#ifdef NONPERIODICITY
+    if ( isPeriodicX || isPeriodicY || isPeriodicZ )
+#else
+    if ( ! isPeriodicX || ! isPeriodicY || ! isPeriodicZ )
+#endif
+        throw std::invalid_argument( msg.str() );
 }
 
 void UpdaterGPUScBFM_AB_Type::setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL )
@@ -828,13 +872,22 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     int32_t  const z
 )
 {
-    if ( false )
+#if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 1
+    /* can I apply periodic modularity here to allow the full range ??? */
+    if ( ! inRange< decltype( mPolymerSystem[0] ) >(x) ||
+         ! inRange< decltype( mPolymerSystem[0] ) >(y) ||
+         ! inRange< decltype( mPolymerSystem[0] ) >(z)    )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setMonomerCoordinates" << "] "
-            << "One or more of the given coordinates is outside the box!";
+            << "One or more of the given coordinates "
+            << "(" << x << "," << y << "," << z << ") "
+            << "is larger than the internal integer data type for "
+            << "representing positions allow! (" << std::numeric_limits< intCUDA >::min()
+            << " <= size <= " << std::numeric_limits< intCUDA >::max() << ")";
         throw std::invalid_argument( msg.str() );
     }
+#endif
     mPolymerSystem[ 3*i+0 ] = x;
     mPolymerSystem[ 3*i+1 ] = y;
     mPolymerSystem[ 3*i+2 ] = z;
@@ -866,6 +919,9 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     uint32_t const boxZ
 )
 {
+    if ( mBoxX == boxX && mBoxY == boxY && mBoxZ == boxZ )
+        return;
+
     if ( ! ( inRange< intCUDA >( boxX ) &&
              inRange< intCUDA >( boxY ) &&
              inRange< intCUDA >( boxZ )    ) )
@@ -874,7 +930,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
         msg << "[" << __FILENAME__ << "::setLatticeSize" << "] "
             << "The box size (" << boxX << "," << boxY << "," << boxZ
             << ") is larger than the internal integer data type for "
-            << "representing positions! ( " << std::numeric_limits< intCUDA >::min()
+            << "representing positions allow! (" << std::numeric_limits< intCUDA >::min()
             << " <= size <= " << std::numeric_limits< intCUDA >::max() << ")";
         throw std::invalid_argument( msg.str() );
     }
@@ -889,25 +945,22 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     /* determine log2 for mBoxX and mBoxX * mBoxY to be used for bitshifting
      * the indice instead of multiplying ... WHY??? I don't think it is faster,
      * but much less readable */
-    mBoxXLog2 = 0;
-    uint32_t dummy = boxX;
-    while ( dummy >>= 1 ) ++mBoxXLog2;
-    mBoxXYLog2 = 0;
-    dummy = boxX*boxY;
-    while ( dummy >>= 1 ) ++mBoxXYLog2;
+    mBoxXLog2  = 0; uint32_t dummy = mBoxX; while ( dummy >>= 1 ) ++mBoxXLog2;
+    mBoxXYLog2 = 0; dummy = mBoxX*mBoxY;    while ( dummy >>= 1 ) ++mBoxXYLog2;
+    if ( mBoxX != ( 1 << mBoxXLog2 ) || mBoxX * boxY != ( 1 << mBoxXYLog2 ) )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setLatticeSize" << "] "
+            << "Could not determine value for bit shift. "
+            << "Check whether the box size is a power of 2! ( "
+            << "boxX=" << mBoxX << " =? 2^" << mBoxXLog2 << " = " << ( 1 << mBoxXLog2 )
+            << ", boxX*boY=" << mBoxX * mBoxY << " =? 2^" << mBoxXYLog2
+            << " = " << ( 1 << mBoxXYLog2 ) << " )\n";
+        throw std::runtime_error( msg.str() );
+    }
 
-    std::cout
-        << "use bit shift for boxX     : (1 << "<< mBoxXLog2  << " ) = "
-        << ( 1 << mBoxXLog2  ) << " = " << mBoxX
-        << "use bit shift for boxX*boxY: (1 << "<< mBoxXYLog2 << " ) = "
-        << ( 1 << mBoxXYLog2 ) << " = " << mBoxX*boxY
-        << std::endl;
-
-    // check if shift is correct
-    if ( boxX != ( 1 << mBoxXLog2 ) || boxX * boxY != ( 1 << mBoxXYLog2 ) )
-        throw std::runtime_error( "Could not determine value for bit shift. Sure your box size is a power of 2? Exiting...\n" );
-
-    //init lattice
+    if ( mLattice != NULL )
+        delete[] mLattice;
     mLattice = new uint8_t[ mBoxX * mBoxY * mBoxZ ];
     std::memset( (void *) mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
 }
@@ -1201,7 +1254,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
     //unbind texture reference to free resource
-    cudaUnbindTexture( texPolymerAndMonomerIsEvenAndOnXRef );
+    cudaUnbindTexture( mPolymerSystem_texture );
 
     //free memory on GPU
     cudaFree( mLatticeOut_device          );

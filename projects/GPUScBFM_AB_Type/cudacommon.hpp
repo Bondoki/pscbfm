@@ -532,6 +532,8 @@ template< class T >
 class MirroredTexture : public MirroredVector<T>
 {
 public:
+    typedef T value_type;
+
     cudaResourceDesc    mResDesc;
     cudaTextureDesc     mTexDesc;
     cudaTextureObject_t mTexture;
@@ -731,8 +733,12 @@ std::string prettyPrintBytes
 
 /**
  * @see https://stackoverflow.com/questions/18625964/checking-if-an-input-is-within-its-range-of-limits-in-c
+ * Use e.g. like this:
+ *   int32_t value = 123456;
+ *   assert( inRange< uint16_t >( value ) ); // will fail, because max. is 65535
  */
 #include <limits>
+#include <type_traits>                      // remove_reference
 
 template< typename T_Range, typename T_Value, bool T_RangeSigned, bool T_ValueSigned >
 struct InIntegerRange;
@@ -778,17 +784,20 @@ struct InIntegerRange< T_Range, T_Value, true, true >
 template< typename T_Range, typename T_Value >
 inline bool inRange( T_Value const & x )
 {
-    if( std::numeric_limits< T_Range >::is_integer )
+    using Range = typename std::remove_reference< T_Range >::type;
+    using Value = typename std::remove_reference< T_Value >::type;
+
+    if( std::numeric_limits< Range >::is_integer )
     {
-        return InIntegerRange< T_Range, T_Value,
-                               std::numeric_limits< T_Range >::is_signed,
-                               std::numeric_limits< T_Value >::is_signed >()( x );
+        return InIntegerRange< Range, Value,
+                               std::numeric_limits< Range >::is_signed,
+                               std::numeric_limits< Value >::is_signed >()( x );
     }
     else
     {
-        return ( x > 0 ? x : -x ) <= std::numeric_limits< T_Range >::max() ||
-               ( std::isnan(x) && std::numeric_limits< T_Range >::has_quiet_NaN ) ||
-               ( std::isinf(x) && std::numeric_limits< T_Range >::has_infinity );
+        return ( x > 0 ? x : -x ) <= std::numeric_limits< Range >::max() ||
+               ( std::isnan(x) && std::numeric_limits< Range >::has_quiet_NaN ) ||
+               ( std::isinf(x) && std::numeric_limits< Range >::has_infinity );
     }
 }
 
