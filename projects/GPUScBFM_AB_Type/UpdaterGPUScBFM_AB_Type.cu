@@ -542,30 +542,23 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     }
     CUDA_CHECK( cudaSetDevice( iGpuToUse ));
 
-
-    /**** create the BondTable and copy to constant memory ****/
-    bool * tmpForbiddenBonds = (bool *) malloc(sizeof(bool)*512);
-    uint nAllowedBonds = 0;
-    for(int i = 0; i < 512; i++)
-    {
-        tmpForbiddenBonds[i] = false;
-        tmpForbiddenBonds[i] = mForbiddenBonds[i];
-        if ( ! tmpForbiddenBonds[i] )
-            nAllowedBonds++;
-    }
-    std::cout << "used bonds in simulation: " << nAllowedBonds << " / 108 " << std::endl;
+    /* create the BondTable and copy it to constant memory */
+    bool * tmpForbiddenBonds = (bool*) malloc( sizeof( bool ) * 512 );
+    unsigned nAllowedBonds = 0;
+    for ( int i = 0; i < 512; ++i )
+        if ( ! ( tmpForbiddenBonds[i] = mForbiddenBonds[i] ) )
+            ++nAllowedBonds;
     if ( nAllowedBonds != 108 )
     {
         std::stringstream msg;
-        msg << "Wrong bond-set! Expected 108 allowed bonds, but got " << nAllowedBonds << ". Exiting...\n";
+        msg << "[" << __FILENAME__ << "::initialize] "
+            << "Wrong bond-set! Expected 108 allowed bonds, but got " << nAllowedBonds << "\n";
         throw std::runtime_error( msg.str() );
     }
     CUDA_CHECK( cudaMemcpyToSymbol( dpForbiddenBonds, tmpForbiddenBonds, sizeof(bool)*512 ) );
-    free(tmpForbiddenBonds);
+    free( tmpForbiddenBonds );
 
-    /* create a table mapping the random int to directions whereto move the
-     * monomers */
-    std::cout << "copy DXYZTable: " << std::endl;
+    /* create a table mapping the random int to directions whereto move the monomers */
     intCUDA tmp_DXTable[6] = { -1,1,  0,0,  0,0 };
     intCUDA tmp_DYTable[6] = {  0,0, -1,1,  0,0 };
     intCUDA tmp_DZTable[6] = {  0,0,  0,0, -1,1 };
@@ -614,9 +607,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
             mMonomerIdsB->host[ nMonomersWrittenB++ ] = i;
     }
     if ( nMonomersSpeciesA != nMonomersWrittenA )
-        throw std::runtime_error( "Number of monomers copeid for species A does not add up!" );
+        throw std::runtime_error( "Number of monomers copied for species A does not add up!" );
     if ( nMonomersSpeciesB != nMonomersWrittenB )
-        throw std::runtime_error( "Number of monomers copeid for species B does not add up!" );
+        throw std::runtime_error( "Number of monomers copied for species B does not add up!" );
      mMonomerIdsA->push();
      mMonomerIdsB->push();
 
@@ -654,28 +647,22 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
 
     MonoInfo_host=(MonoInfo*) calloc(nAllMonomers,sizeof(MonoInfo));
-    CUDA_CHECK(  cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo));   // Allocate array of structure on device
+    CUDA_CHECK( cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo) );   // Allocate array of structure on device
 
-
+    /* add property tags for each monomer with number of neighbor information */
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //MonoInfo_host[i].size = mNeighbors[i].size;
-        if((mNeighbors[i].size) > 7)
+        if ( mNeighbors[i].size > 7)
         {
-            std::cout << "this GPU-model allows max 7 next neighbors but size is " << (mNeighbors[i].size) << ". Exiting..." << std::endl;
-            throw std::runtime_error( "Limit of connectivity on GPU reached! Exiting...\n" );
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::initialize] "
+                << "This implementation allows max. 7 neighbors per monomer, "
+                << "but monomer " << i << " has " << mNeighbors[i].size << "\n";
+            throw std::invalid_argument( msg.str() );
         }
-
-        mPolymerSystem_host[4*i+3] |= ((intCUDA)(mNeighbors[i].size)) << 5;
-        //cout << "mono:" << i << " vs " << (i) << endl;
-        //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
-
-        for(unsigned u=0; u < MAX_CONNECTIVITY; u++)
-        {
+        mPolymerSystem_host[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
+        for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
             MonoInfo_host[i].bondsMonomerIdx[u] = mNeighbors[i].bondsMonomerIdx[u];
-
-            //cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << mNeighbors[i].bondsMonomerIdx[u] << endl;
-        }
     }
     CUDA_CHECK( cudaMemcpy( MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice ) );
 
@@ -776,25 +763,26 @@ void UpdaterGPUScBFM_AB_Type::copyBondSet
     mForbiddenBonds[ linearizeBondVectorIndex(dx,dy,dz) ] = bondForbidden;
 }
 
-void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t rnAllMonomers )
+void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
 {
-    nAllMonomers = rnAllMonomers;
-    #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 20
-        std::cout << "[" << __FILENAME__ << "::setNrOfAllMonomers" << "] "
-            << "used monomers in simulation: " << nAllMonomers << std::endl;
-    #endif
+    if ( this->nAllMonomers != 0 || mAttributeSystem != NULL ||
+         mPolymerSystem != NULL || mNeighbors != NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setNrOfAllMonomers] "
+            << "Number of Monomers already set to " << nAllMonomers << "!\n"
+            << "Or some arrays were already allocated "
+            << "(mAttributeSystem=" << (void*) mAttributeSystem
+            << ", mPolymerSystem" << (void*) mPolymerSystem
+            << ", mNeighbors" << (void*) mNeighbors << ")\n";
+        throw std::runtime_error( msg.str() );
+    }
 
+    this->nAllMonomers = rnAllMonomers;
     mAttributeSystem = new int32_t[ nAllMonomers ];
     mPolymerSystem   = new int32_t[ nAllMonomers*3 ];
-
-    //idx is reduced by one compared to the file
-    mNeighbors = new MonoNNIndex[ nAllMonomers ];
-    for ( uint32_t i = 0; i < nAllMonomers; ++i )
-    {
-        mNeighbors[i].size = 0;
-        for ( unsigned o = 0; o < MAX_CONNECTIVITY; ++o )
-            mNeighbors[i].bondsMonomerIdx[o] = 0;
-    }
+    mNeighbors       = new MonoNNIndex[ nAllMonomers ];
+    std::memset( mNeighbors, 0, sizeof( mNeighbors[0] ) * nAllMonomers );
 }
 
 void UpdaterGPUScBFM_AB_Type::setPeriodicity
@@ -865,6 +853,15 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem[ 3*i+0 ] = x;
     mPolymerSystem[ 3*i+1 ] = y;
     mPolymerSystem[ 3*i+2 ] = z;
+
+    if ( mPolymerSystem == NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setMonomerCoordinates" << "] "
+            << "mPolymerSystem is not allocated. You need to call "
+            << "setNrOfAllMonomers before calling setMonomerCoordinates!\n";
+        throw std::invalid_argument( msg.str() );
+    }
 }
 
 int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[ 3*i+0 ]; }
@@ -964,6 +961,15 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
  */
 void UpdaterGPUScBFM_AB_Type::checkSystem()
 {
+    if ( mLattice == NULL || mPolymerSystem == NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::checkSystem" << "] "
+            << "mPolymerSystem or mLattice is not allocated. You need to call "
+            << "setNrOfAllMonomers and initialize before calling checkSystem!\n";
+        throw std::invalid_argument( msg.str() );
+    }
+
     /**
      * Test for excluded volume by setting all lattice points and count the
      * toal lattice points occupied. If we have overlap this will be smaller
@@ -1084,17 +1090,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
                         mMonomerIdsA->texture, nMonomersSpeciesA,
                         texLatticeTmpRef
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         mMonomerIdsA->texture, nMonomersSpeciesA
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     break;
 
                 case 1:
@@ -1105,17 +1114,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
                         mMonomerIdsB->texture, nMonomersSpeciesB,
                         texLatticeTmpRef
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         mMonomerIdsB->texture, nMonomersSpeciesB
                     );
+                    CUDA_CHECK( cudaDeviceSynchronize() );
                     break;
 
                 default: break;
