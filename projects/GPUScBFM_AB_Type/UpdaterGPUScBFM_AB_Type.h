@@ -12,29 +12,11 @@
 #include <cstdio>                           // printf
 #include <stdint.h>                         // uint32_t
 
-#include <cuda.h>
-
 #include <LeMonADE/utility/RandomNumberGenerators.h>
 
 
-#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 
-#define CUDA_CHECK(cmd)                                                 \
-{                                                                       \
-    cudaError_t error = cmd;                                            \
-    if ( error != cudaSuccess )                                         \
-    {                                                                   \
-        printf( "<%s>:%i ", __FILENAME__, __LINE__ );                       \
-        printf( "[CUDA] Error: %s\n", cudaGetErrorString( error ) );    \
-        exit(1);                                                        \
-    }                                                                   \
-}
-
-/* hard-coded optimal CUDA Kernel parameters */
-#define NUMBLOCKS 16
-#define NUMTHREADS 256
-
-/* still used ??? Will this need a switch? */
+/* This is still used, at least the 32 bit version! */
 #if 0
     typedef uint32_t uintCUDA;
     typedef int32_t  intCUDA;
@@ -83,7 +65,10 @@ private:
      * Actually an array of nMonomers * 3 lengths, stores the lower left front
      * point of the 2x2x2 monomer inside the lattice.
      */
-    int32_t *  mPolymerSystem;
+    int32_t  * mPolymerSystem;
+    intCUDA  * mPolymerSystem_device;
+    intCUDA  * mPolymerSystem_host;
+
     int32_t *  mAttributeSystem;
 
     //! Holds connectivity information
@@ -104,9 +89,6 @@ private:
     uint32_t   mBoxXLog2 ;
     uint32_t   mBoxXYLog2;
 
-    intCUDA  * mPolymerSystem_device;
-    intCUDA  * mPolymerSystem_host;
-
     uint8_t  * mLatticeOut_host;
     uint8_t  * mLatticeOut_device;
 
@@ -122,11 +104,8 @@ private:
     uint32_t * MonomersSpeziesIdx_A_device;
     uint32_t * MonomersSpeziesIdx_B_device;
 
-    uint32_t   numblocksSpecies_A;
-    uint32_t   numblocksSpecies_B;
-
-    uint32_t nMonomersSpeciesA;
-    uint32_t nMonomersSpeciesB;
+    uint32_t   nMonomersSpeciesA;
+    uint32_t   nMonomersSpeciesB;
 
     uint32_t linearizeBoxVectorIndex
     (

@@ -15,13 +15,13 @@
 #include <stdint.h>
 #include <sstream>
 
+#include "cudacommon.hpp"
 #include "UpdaterGPUScBFM_AB_Type.h"
 
 #define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
 
 
-/* why 512??? Because 512==8^3 ??? but that would mean 8 possible values instead of
- * -4 to +4 which I saw being used ... */
+/* 512=8^3 for a range of bonds per direction of [-4,3] */
 __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbidden
 
 /**
@@ -600,12 +600,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpeciesA)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
     CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpeciesB)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
 
-    /************************end: creating look-up for species*****************************************/
-
-    /* calculate kernel config */
-    /* ceilDiv better ??? */
-    numblocksSpecies_A = (nMonomersSpeciesA-1)/NUMTHREADS+1;
-    numblocksSpecies_B = (nMonomersSpeciesB-1)/NUMTHREADS+1;
 
     /****************************copy monomer informations ********************************************/
     mPolymerSystem_host =(intCUDA *) malloc((4*nAllMonomers+1)*sizeof(intCUDA));
@@ -1012,51 +1006,56 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
+    long int const nThreads        = 256;
+    long int const nBlocksSpeciesA = ceilDiv( nMonomersSpeciesA, nThreads );
+    long int const nBlocksSpeciesB = ceilDiv( nMonomersSpeciesB, nThreads );
+
     /* run simulation */
     for ( int32_t iStep = 1; iStep <= nMonteCarloSteps; ++iStep )
     {
         /* one Monte-Carlo step */
         for ( uint32_t iSubStep = 0; iSubStep < 2; ++iSubStep )
         {
+            /* randomly choose whether to advance monomers groupt to A or B */
             switch ( randomNumbers.r250_rand32() % 2 )
             {
-                case 0:  // run Spezies_A monomers
+                case 0:
                     kernelSimulationScBFMCheckSpecies
-                    <<< numblocksSpecies_A, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         MonoInfo_device, texSpeciesIndicesA,
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
-                    <<< numblocksSpecies_A, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
                         texSpeciesIndicesA, nMonomersSpeciesA,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
-                    <<< numblocksSpecies_A, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         texSpeciesIndicesA, nMonomersSpeciesA
                     );
                     break;
 
-                case 1: // run Spezies_B monomers
+                case 1:
                     kernelSimulationScBFMCheckSpecies
-                    <<< numblocksSpecies_B, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         MonoInfo_device, texSpeciesIndicesB,
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
-                    <<< numblocksSpecies_B, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
                         texSpeciesIndicesB, nMonomersSpeciesB,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
-                    <<< numblocksSpecies_B, NUMTHREADS >>>(
+                    <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
                         texSpeciesIndicesB, nMonomersSpeciesB
                     );
