@@ -153,7 +153,7 @@ __device__ uint32_t linearizeBoxVectorIndex
 
 /**
  * Checks the 3x3 grid one in front of the new position in the direction of the
- * move given by axis
+ * move given by axis.
  *
  * @verbatim
  *           ____________
@@ -174,6 +174,8 @@ __device__ uint32_t linearizeBoxVectorIndex
  * @param[in] axis +-x, +-y, +-z in that order from 0 to 5, or put in another
  *                 equivalent way: the lowest bit specifies +(1) or -(0) and the
  *                 Bit 2 and 1 specify the axis: 0b00=x, 0b01=y, 0b10=z
+ * @return Returns true if any of that is occupied, i.e. if there
+ *         would be a problem with the excluded volume condition.
  */
 __device__ inline bool checkFront
 (
@@ -184,41 +186,64 @@ __device__ inline bool checkFront
     intCUDA             const & axis
 )
 {
-    uint8_t test = 0;
-#if 0 // defined( NOMAGIC ) // both versions successfully tested :)
+    bool isOccupied = false;
+#if 0
+    #define TMP_FETCH( x,y,z ) \
+        tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+    intCUDA const shift  = 4*(axis & 1)-2;
+    intCUDA const iMove = axis >> 1;
+    /* reduce branching by parameterizing the access axis, but that
+     * makes the memory accesses more random again ???
+     * for i0=0, i1=1, axis=z (same as in function doxygen ascii art)
+     *    4 3 2
+     *    5 0 1
+     *    6 7 8
+     */
+    intCUDA r[3] = { x0, y0, z0 };
+    r[ iMove ] += shift; isOccupied = TMP_FETCH( r[0], r[1], r[2] ); /* 0 */
+    intCUDA i0 = iMove+1 >= 3 ? iMove+1-3 : iMove+1;
+    intCUDA i1 = iMove+2 >= 3 ? iMove+2-3 : iMove+2;
+    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 1 */
+    r[ i1 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 2 */
+    r[ i0 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 3 */
+    r[ i0 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 4 */
+    r[ i1 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 5 */
+    r[ i1 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 6 */
+    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 7 */
+    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
+    #undef TMP_FETCH
+#elif 0 // defined( NOMAGIC )
     intCUDA const shift = 4*(axis & 1)-2;
-    /* reduce branching by parameterizing the access axis!!! But that
-     * makes the memory accesses more random again */
     switch ( axis >> 1 )
     {
         #define TMP_FETCH( x,y,z ) \
             tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
         case 0: //-+x
         {
-            uint32_t const x1 = ( x0 + shift ) & dcBoxXM1;
-            test = TMP_FETCH( x1, y0 - 1, z0     ) |
-                   TMP_FETCH( x1, y0    , z0     ) |
-                   TMP_FETCH( x1, y0 + 1, z0     ) |
-                   TMP_FETCH( x1, y0 - 1, z0 - 1 ) |
-                   TMP_FETCH( x1, y0    , z0 - 1 ) |
-                   TMP_FETCH( x1, y0 + 1, z0 - 1 ) |
-                   TMP_FETCH( x1, y0 - 1, z0 + 1 ) |
-                   TMP_FETCH( x1, y0    , z0 + 1 ) |
-                   TMP_FETCH( x1, y0 + 1, z0 + 1 );
+            uint32_t const x1 = x0 + shift;
+            isOccupied = TMP_FETCH( x1, y0 - 1, z0     ) |
+                         TMP_FETCH( x1, y0    , z0     ) |0
+                         TMP_FETCH( x1, y0 + 1, z0     ) |
+                         TMP_FETCH( x1, y0 - 1, z0 - 1 ) |
+                         TMP_FETCH( x1, y0    , z0 - 1 ) |
+                         TMP_FETCH( x1, y0 + 1, z0 - 1 ) |
+                         TMP_FETCH( x1, y0 - 1, z0 + 1 ) |
+                         TMP_FETCH( x1, y0    , z0 + 1 ) |
+                         TMP_FETCH( x1, y0 + 1, z0 + 1 );
             break;
         }
         case 1: //-+y
         {
-            uint32_t const y1 = ( y0 + shift ) & dcBoxYM1;
-            test = TMP_FETCH( x0 - 1, y1, z0 - 1 ) |
-                   TMP_FETCH( x0    , y1, z0 - 1 ) |
-                   TMP_FETCH( x0 + 1, y1, z0 - 1 ) |
-                   TMP_FETCH( x0 - 1, y1, z0     ) |
-                   TMP_FETCH( x0    , y1, z0     ) |
-                   TMP_FETCH( x0 + 1, y1, z0     ) |
-                   TMP_FETCH( x0 - 1, y1, z0 + 1 ) |
-                   TMP_FETCH( x0    , y1, z0 + 1 ) |
-                   TMP_FETCH( x0 + 1, y1, z0 + 1 );
+            uint32_t const y1 = y0 + shift;
+            isOccupied = TMP_FETCH( x0 - 1, y1, z0 - 1 ) |
+                         TMP_FETCH( x0    , y1, z0 - 1 ) |
+                         TMP_FETCH( x0 + 1, y1, z0 - 1 ) |
+                         TMP_FETCH( x0 - 1, y1, z0     ) |
+                         TMP_FETCH( x0    , y1, z0     ) |
+                         TMP_FETCH( x0 + 1, y1, z0     ) |
+                         TMP_FETCH( x0 - 1, y1, z0 + 1 ) |
+                         TMP_FETCH( x0    , y1, z0 + 1 ) |
+                         TMP_FETCH( x0 + 1, y1, z0 + 1 );
             break;
         }
         case 2: //-+z
@@ -234,16 +259,16 @@ __device__ inline bool checkFront
              *   +---+---+---+
              * @endverbatim
              */
-            uint32_t const z1 = ( z0 + shift ) & dcBoxZM1;
-            test = TMP_FETCH( x0 - 1, y0 - 1, z1 ) | /* 0 */
-                   TMP_FETCH( x0    , y0 - 1, z1 ) | /* 1 */
-                   TMP_FETCH( x0 + 1, y0 - 1, z1 ) | /* 2 */
-                   TMP_FETCH( x0 - 1, y0    , z1 ) | /* 3 */
-                   TMP_FETCH( x0    , y0    , z1 ) | /* 4 */
-                   TMP_FETCH( x0 + 1, y0    , z1 ) | /* 5 */
-                   TMP_FETCH( x0 - 1, y0 + 1, z1 ) | /* 6 */
-                   TMP_FETCH( x0    , y0 + 1, z1 ) | /* 7 */
-                   TMP_FETCH( x0 + 1, y0 + 1, z1 );  /* 8 */
+            uint32_t const z1 = z0 + shift;
+            isOccupied = TMP_FETCH( x0 - 1, y0 - 1, z1 ) | /* 0 */
+                         TMP_FETCH( x0    , y0 - 1, z1 ) | /* 1 */
+                         TMP_FETCH( x0 + 1, y0 - 1, z1 ) | /* 2 */
+                         TMP_FETCH( x0 - 1, y0    , z1 ) | /* 3 */
+                         TMP_FETCH( x0    , y0    , z1 ) | /* 4 */
+                         TMP_FETCH( x0 + 1, y0    , z1 ) | /* 5 */
+                         TMP_FETCH( x0 - 1, y0 + 1, z1 ) | /* 6 */
+                         TMP_FETCH( x0    , y0 + 1, z1 ) | /* 7 */
+                         TMP_FETCH( x0 + 1, y0 + 1, z1 );  /* 8 */
             break;
         }
         #undef TMP_FETCH
@@ -267,48 +292,51 @@ __device__ inline bool checkFront
         case 0: //-+x
         {
             uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
-            test = tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
             break;
         }
         case 1: //-+y
         {
             uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
-            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
             break;
         }
         case 2: //-+z
         {
             uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
-            test = tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
-                   tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
             break;
         }
     }
 #endif
-    return test;
+    return isOccupied;
 }
 
 __device__ __host__ uintCUDA linearizeBondVectorIndex
