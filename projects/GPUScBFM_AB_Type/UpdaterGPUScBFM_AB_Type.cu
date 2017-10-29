@@ -921,6 +921,10 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem[ 3*i+2 ] = z;
 }
 
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[ 3*i+0 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( uint32_t i ){ return mPolymerSystem[ 3*i+1 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( uint32_t i ){ return mPolymerSystem[ 3*i+2 ]; }
+
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
     uint32_t const iMonomer1,
@@ -1130,20 +1134,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        MonoInfo_device, mMonomerIdsA->mTexture,
+                        MonoInfo_device, mMonomerIdsA->texture,
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
-                        mMonomerIdsA->mTexture, nMonomersSpeciesA,
+                        mMonomerIdsA->texture, nMonomersSpeciesA,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        mMonomerIdsA->mTexture, nMonomersSpeciesA
+                        mMonomerIdsA->texture, nMonomersSpeciesA
                     );
                     break;
 
@@ -1151,20 +1155,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        MonoInfo_device, mMonomerIdsB->mTexture,
+                        MonoInfo_device, mMonomerIdsB->texture,
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
-                        mMonomerIdsB->mTexture, nMonomersSpeciesB,
+                        mMonomerIdsB->texture, nMonomersSpeciesB,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        mMonomerIdsB->mTexture, nMonomersSpeciesB
+                        mMonomerIdsB->texture, nMonomersSpeciesB
                     );
                     break;
 

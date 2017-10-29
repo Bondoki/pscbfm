@@ -62,16 +62,29 @@ private:
      * Suggestion: bitpack it to save 8 times memory and possibly make the
      *             the reading faster if it is memory bound ???
      */
-    uint8_t *  mLattice;
+    uint8_t * mLattice;
+
+    /* copy into mPolymerSystem and drop the property tag while doing so.
+     * would be easier and probably more efficient if mPolymerSystem_device/host
+     * would be a struct of arrays instead of an array of structs !!! */
     /**
-     * Actually an array of nMonomers * 3 lengths, stores the lower left front
-     * point of the 2x2x2 monomer inside the lattice.
+     * Contains the nMonomers particles as well as a property tag for each:
+     *   [ x0, y0, z0, p0, x1, y1, z1, p1, ... ]
+     * The property tags p are bit packed:
+     *                        8  7  6  5  4  3  2  1  0
+     * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     * | unused |  |  |  |  |c |   nnr  |  dir   |move |
+     * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *  c   ... charged: 0 no, 1: yes
+     *  nnr ... number of neighbors, this will get populated from LeMonADE's
+     *          get get
+     * The saved location is used as the lower left front corner when
+     * populating the lattice with 2x2x2 boxes representing the monomers
      */
-     /* CURRENTLY WORKING ON THIS !! just cut the intermediary crap and
-      * add a check to setMonomerCoordinates */
     int32_t  * mPolymerSystem;
     intCUDA  * mPolymerSystem_device;
     intCUDA  * mPolymerSystem_host;
+    //MirroredTexture< intCUDA > * mPolymerSystem;
 
     int32_t *  mAttributeSystem;
 
@@ -102,6 +115,12 @@ private:
     /* stores connectivity information for the monomers */
     MonoInfo * MonoInfo_host, *MonoInfo_device;
 
+    /**
+     * These are arrays containing the monomer indices for the respective
+     * species (sorted ascending). E.g. for AABABBA this would be:
+     *   mMonomerIdsA = { 0,1,3,6 } -> nMonomersSpeciesA = 4
+     *   mMonomerIdsB = { 1,4,5 }   -> nMonomersSpeciesB = 3
+     */
     uint32_t nMonomersSpeciesA, nMonomersSpeciesB;
     MirroredTexture< uint32_t > * mMonomerIdsA, * mMonomerIdsB;
 
@@ -140,9 +159,9 @@ public:
     void populateLattice();
     void runSimulationOnGPU( int32_t nrMCS_per_Call );
 
-    inline int32_t getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[3*i+0]; }
-    inline int32_t getMonomerPositionInY( uint32_t i ){ return mPolymerSystem[3*i+1]; }
-    inline int32_t getMonomerPositionInZ( uint32_t i ){ return mPolymerSystem[3*i+2]; }
+    int32_t getMonomerPositionInX( uint32_t i );
+    int32_t getMonomerPositionInY( uint32_t i );
+    int32_t getMonomerPositionInZ( uint32_t i );
 
     void setPeriodicity( bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ );
 

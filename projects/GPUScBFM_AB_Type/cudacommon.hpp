@@ -374,6 +374,7 @@ inline void getCudaDeviceProperties
         printf( "| Memory Clock Rate        : %f GHz\n"    , prop->memoryClockRate/1.0e6f );
         printf( "| Memory Pitch             : %lu\n"       , prop->memPitch );
         printf( "| Unified Addressing       : %i\n"        , prop->unifiedAddressing );
+        printf( "| Texture Alignment        :  %ld\n"      , prop->textureAlignment );
 		printf( "|--------------------- Graphics ---------------------\n" );
 		printf( "| Compute mode             : %s\n"        ,      computeModeString );
 		printf( "|---------------------- Other -----------------------\n" );
@@ -388,6 +389,9 @@ inline void getCudaDeviceProperties
         printf( "| Uses TESLA Driver        : %s\n"        , prop->tccDriver         ? "true" : "false" );
         printf( "=====================================================\n" );
     }
+
+    if ( rpDeviceProperties == &fallbackPropArray )
+        free( fallbackPropArray );
 }
 
 #endif
@@ -536,7 +540,7 @@ public:
 
     cudaResourceDesc    mResDesc;
     cudaTextureDesc     mTexDesc;
-    cudaTextureObject_t mTexture;
+    cudaTextureObject_t texture ;
 
     /**
      * @see http://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TEXTURE__OBJECT.html
@@ -577,7 +581,7 @@ public:
         mTexDesc.readMode = cudaReadModeElementType;
 
         /* the last three arguments are pointers to constants! */
-        cudaCreateTextureObject( &mTexture, &mResDesc, &mTexDesc, NULL );
+        cudaCreateTextureObject( &texture, &mResDesc, &mTexDesc, NULL );
     }
 
     inline MirroredTexture
@@ -585,15 +589,15 @@ public:
         size_t const rnElements,
         cudaStream_t rStream = 0
     )
-     : MirroredVector<T>( rnElements, rStream ), mTexture( 0 )
+     : MirroredVector<T>( rnElements, rStream ), texture( 0 )
     {
         this->bind();
     }
 
     inline ~MirroredTexture()
     {
-        cudaDestroyTextureObject( mTexture );
-        mTexture = 0;
+        cudaDestroyTextureObject( texture );
+        texture = 0;
         this->free();
     }
 };
