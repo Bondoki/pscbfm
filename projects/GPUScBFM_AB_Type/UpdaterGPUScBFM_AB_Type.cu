@@ -57,10 +57,6 @@ __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
  */
 texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > mPolymerSystem_texture;
 
-cudaTextureObject_t texLatticeRefOut = 0;
-cudaTextureObject_t texLatticeTmpRef = 0;
-
-
 
 __device__ uint32_t hash( uint32_t a )
 {
@@ -432,6 +428,10 @@ __global__ void kernelSimulationScBFMCheckSpecies
     dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
 }
 
+
+/**
+ * If the move was flagged as possible
+ */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
     intCUDA             * const dpPolymerSystem ,
@@ -526,6 +526,8 @@ UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
     if ( mNeighbors       != NULL ){ delete[] mNeighbors      ; mNeighbors       = NULL; }
     if ( mMonomerIdsA     != NULL ){ delete[] mMonomerIdsA    ; mMonomerIdsA     = NULL; }
     if ( mMonomerIdsB     != NULL ){ delete[] mMonomerIdsB    ; mMonomerIdsB     = NULL; }
+    if ( mLatticeOut      != NULL ){ delete[] mLatticeOut     ; mLatticeOut      = NULL; }
+    if ( mLatticeTmp      != NULL ){ delete[] mLatticeTmp     ; mLatticeTmp      = NULL; }
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
@@ -656,14 +658,13 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
     CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
 
-    mLatticeOut_host = (uint8_t *) malloc( mBoxX*mBoxY*mBoxZ*sizeof(uint8_t));
-    mLatticeTmp_host = (uint8_t *) malloc( mBoxX*mBoxY*mBoxZ*sizeof(uint8_t));
-    std::cout << "try to allocate : " << (mBoxX*mBoxY*mBoxZ*sizeof(uint8_t)) << " bytes = " << (mBoxX*mBoxY*mBoxZ*sizeof(uint8_t)/(1024.0*1024.0)) << " MB lattice on GPU " << std::endl;
-    CUDA_CHECK( cudaMalloc( (void **) &mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_device ) ) );
-    CUDA_CHECK( cudaMalloc( (void **) &mLatticeTmp_device, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeTmp_device ) ) );
-    CUDA_CHECK( cudaMemset( mLatticeTmp_device, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeTmp_device ) ) );
-
-    std::memset( mLatticeOut_host, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_host ) );
+    if ( mLatticeOut == NULL )
+        mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
+    if ( mLatticeTmp == NULL )
+        mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
+    CUDA_CHECK( cudaMemset( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes ) );
+    /* populate latticeOut with monomers from mPolymerSystem */
+    std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
     for ( int t = 0; t < nAllMonomers; ++t )
     {
         #ifdef USEZCURVE
@@ -673,42 +674,16 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
             uint32_t inter3 = interleave3( xk/2 , yk/2, zk/2 );
             mLatticeOut_host[ ( ( mPolymerSystem_host[ 4*t+3 ] & 1 ) << 23 ) + inter3 ] = 1;
         #else
-        mLatticeOut_host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
-                                                   mPolymerSystem[ 4*t+1 ],
-                                                   mPolymerSystem[ 4*t+2 ] ) ] = 1;
+        mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
+                                                    mPolymerSystem[ 4*t+1 ],
+                                                    mPolymerSystem[ 4*t+2 ] ) ] = 1;
         #endif
     }
-    CUDA_CHECK( cudaMemcpy( mLatticeOut_device, mLatticeOut_host, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_host ), cudaMemcpyHostToDevice ) );
+    mLatticeOut->push();
     CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
 
-    /* bind textures */
     cudaBindTexture( 0, mPolymerSystem_texture, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
 
-    /* new with texture object... they said it would be easier -.- */
-    cudaResourceDesc resDescA;
-    memset( &resDescA, 0, sizeof( resDescA ) );
-    resDescA.resType                = cudaResourceTypeLinear;
-    resDescA.res.linear.desc.f      = cudaChannelFormatKindUnsigned;
-    resDescA.res.linear.desc.x      = 32; // bits per channel
-    cudaResourceDesc resDescRefOut = resDescA;
-
-    cudaTextureDesc texDescROM;
-    memset( &texDescROM, 0, sizeof( texDescROM ) );
-    texDescROM.readMode = cudaReadModeElementType;
-
-    /* lattice textures */
-    resDescRefOut.res.linear.desc.x = 8; // bits per channel
-    resDescRefOut.res.linear.sizeInBytes = mBoxX*mBoxY*mBoxZ*sizeof(uint8_t);
-    cudaResourceDesc resDescTmpRef = resDescRefOut;
-    resDescRefOut.res.linear.devPtr = mLatticeOut_device;
-    resDescTmpRef.res.linear.devPtr = mLatticeTmp_device;
-
-    cudaCreateTextureObject( &texLatticeRefOut, &resDescRefOut, &texDescROM, NULL );
-    cudaCreateTextureObject( &texLatticeTmpRef, &resDescTmpRef, &texDescROM, NULL );
-
-    std::cerr << "[" << __FILENAME__ << "::initialize] Can't use cudaMemcpy2D"
-        << " ( sizeof polymersystem, host: " << sizeof( *mPolymerSystem )
-        << ", GPU: " << sizeof( *mPolymerSystem_device ) << ")\n";
     CUDA_CHECK( cudaMemcpy( mPolymerSystem, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
 
     checkSystem();
@@ -1043,22 +1018,22 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 case 0:
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp_device,
+                        mPolymerSystem_device, mLatticeTmp->gpu,
                         MonoInfo_device, mMonomerIdsA->texture,
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
-                        texLatticeRefOut
+                        mLatticeOut->texture
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeOut_device,
+                        mPolymerSystem_device, mLatticeOut->gpu,
                         mMonomerIdsA->texture, nMonomersSpeciesA,
-                        texLatticeTmpRef
+                        mLatticeTmp->texture
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp_device,
+                        mPolymerSystem_device, mLatticeTmp->gpu,
                         mMonomerIdsA->texture, nMonomersSpeciesA
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
@@ -1067,22 +1042,22 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 case 1:
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp_device,
+                        mPolymerSystem_device, mLatticeTmp->gpu,
                         MonoInfo_device, mMonomerIdsB->texture,
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
-                        texLatticeRefOut
+                        mLatticeOut->texture
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeOut_device,
+                        mPolymerSystem_device, mLatticeOut->gpu,
                         mMonomerIdsB->texture, nMonomersSpeciesB,
-                        texLatticeTmpRef
+                        mLatticeTmp->texture
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp_device,
+                        mPolymerSystem_device, mLatticeTmp->gpu,
                         mMonomerIdsB->texture, nMonomersSpeciesB
                     );
                     CUDA_CHECK( cudaDeviceSynchronize() );
@@ -1094,11 +1069,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     /* all MCS are done- copy information back from GPU to host */
-    CUDA_CHECK( cudaMemcpy( mLatticeTmp_host, mLatticeTmp_device, mBoxX * mBoxY * mBoxZ * sizeof( uint8_t ), cudaMemcpyDeviceToHost ) );
-
+    mLatticeTmp->pop();
     unsigned nOccupied = 0;
     for ( unsigned i = 0u; i < mBoxX * mBoxY * mBoxZ; ++i )
-        nOccupied += mLatticeTmp_host[i] != 0;
+        nOccupied += mLatticeTmp->host[i] != 0;
     if ( nOccupied != 0 )
     {
         std::stringstream msg;
@@ -1107,9 +1081,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     /* why isn't this copied directly into mLattice ??? */
-    CUDA_CHECK( cudaMemcpy( mLatticeOut_host, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof( uint8_t ), cudaMemcpyDeviceToHost ) );
+    mLatticeOut->pop();
     for ( int i = 0; i < mBoxX * mBoxY * mBoxZ; ++i )
-        mLattice[i] = mLatticeOut_host[i];
+        mLattice[i] = mLatticeOut->host[i];
 
     //start -z-order
     /*
@@ -1155,7 +1129,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     /* copy information / results from GPU to Host. Actually not really
      * needed, because this is done after each kernel run i.e. the only thing
      * which should be able to touch the GPU data. (already deleted mPolymerSystem!) */
-    CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost ) );
+    CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut->gpu, mLatticeOut->nBytes, cudaMemcpyDeviceToHost ) );
 
     /* check whether connectivities on GPU got corrupted */
     int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
@@ -1187,16 +1161,14 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     }
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
-    cudaFree( mLatticeOut_device          );
-    cudaFree( mLatticeTmp_device          );
     cudaFree( mPolymerSystem_device       );
     cudaFree( MonoInfo_device             );
 
     free( MonoInfo_host             );
-    free( mLatticeOut_host          );
-    free( mLatticeTmp_host          );
 
     if ( mPolymerSystem != NULL ){ delete[] mPolymerSystem; mPolymerSystem = NULL; }
     if ( mMonomerIdsA   != NULL ){ delete[] mMonomerIdsA  ; mMonomerIdsA   = NULL; }
     if ( mMonomerIdsB   != NULL ){ delete[] mMonomerIdsB  ; mMonomerIdsB   = NULL; }
+    if ( mLatticeOut    != NULL ){ delete[] mLatticeOut   ; mLatticeOut    = NULL; }
+    if ( mLatticeTmp    != NULL ){ delete[] mLatticeTmp   ; mLatticeTmp    = NULL; }
 }

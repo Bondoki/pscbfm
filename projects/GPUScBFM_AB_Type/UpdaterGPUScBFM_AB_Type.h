@@ -63,6 +63,7 @@ private:
      *             the reading faster if it is memory bound ???
      */
     uint8_t * mLattice;
+    MirroredTexture< uint8_t > * mLatticeOut, * mLatticeTmp;
 
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host
@@ -104,12 +105,6 @@ private:
     uint32_t   mBoxZM1   ;
     uint32_t   mBoxXLog2 ;
     uint32_t   mBoxXYLog2;
-
-    uint8_t  * mLatticeOut_host;
-    uint8_t  * mLatticeOut_device;
-
-    uint8_t  * mLatticeTmp_device;
-    uint8_t  * mLatticeTmp_host;
 
     /* stores connectivity information for the monomers */
     MonoInfo * MonoInfo_host, *MonoInfo_device;
