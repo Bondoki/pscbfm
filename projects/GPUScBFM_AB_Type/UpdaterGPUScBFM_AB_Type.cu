@@ -117,9 +117,9 @@ __device__ uint32_t linearizeBoxVectorIndex
 )
 {
     #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
-        assert( isPowerOfTwo( mBoxXM1 + 1 ) );
-        assert( isPowerOfTwo( mBoxYM1 + 1 ) );
-        assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+        assert( isPowerOfTwo( dcBoxXM1 + 1 ) );
+        assert( isPowerOfTwo( dcBoxYM1 + 1 ) );
+        assert( isPowerOfTwo( dcBoxZM1 + 1 ) );
     #endif
     return   ( ix & dcBoxXM1 ) +
            ( ( iy & dcBoxYM1 ) << dcBoxXLog2  ) +
@@ -322,10 +322,13 @@ __device__ __host__ uintCUDA linearizeBondVectorIndex
 )
 {
     /* Just like for normal integers we clip the range to go more down than up
-     * i.e. [-127 ,128] or in this case [-4,3] */
-    assert( ( x & 7 ) == x );
-    assert( ( y & 7 ) == y );
-    assert( ( z & 7 ) == z );
+     * i.e. [-127 ,128] or in this case [-4,3]
+     * +4 maps to the same location as -4 but is needed or else forbidden
+     * bonds couldn't be detected. Larger bonds are not possible, because
+     * monomers only move by 1 per step */
+    assert( -4 <= x && x <= 4 );
+    assert( -4 <= y && y <= 4 );
+    assert( -4 <= z && z <= 4 );
     return   ( x & 7 /* 0b111 */ ) +
            ( ( y & 7 /* 0b111 */ ) << 3 ) +
            ( ( z & 7 /* 0b111 */ ) << 6 );
@@ -339,6 +342,8 @@ __device__ __host__ uintCUDA linearizeBondVectorIndex
  * If so, then the new position is set to 1 in dpLatticeTmp and encode the
  * possible movement direction in the property tag of the corresponding monomer
  * in dpPolymerSystem.
+ * Note that the old position is not removed in order to correctly check for
+ * excluded volume a second time.
  *
  * @param[in] rn a random number used as a kind of seed for the RNG
  * @param[in] nMonomers number of max. monomers to work on, this is for
@@ -374,7 +379,6 @@ __global__ void kernelSimulationScBFMCheckSpecies
     if ( linId >= nMonomers )
         return;
 
-    // "select random monomer" ??? I don't see why this is random? texSpeciesIndices is not randomized!
     uint32_t const iMonomer   = tex1Dfetch< uint32_t >( texSpeciesIndices, linId );
     /* isn't this basically an array of structs where a struct of arrays
      * should be faster ??? */
@@ -416,11 +420,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
         return;
 
-    // everything fits -> perform the move - add the information
-    // possible move
-    /* ??? can I simply & dcBoxXM1 ? this looks like something like
-     * ( x0+dx ) % xmax is trying to be achieved. Using bitmasking for that
-     * is only possible if dcBoxXM1+1 is a power of two ... */
+    /* everything fits so perform move on temporary lattice */
     /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
      * texture used above. Won't this result in read-after-write race-conditions?
      * Then again the written / changed bits are never used in the above code ... */
@@ -430,7 +430,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
 
 
 /**
- * If the move was flagged as possible
+ * Recheck whether the move is possible without collision, using the
+ * temporarily parallel executed moves saved in texLatticeTmp. If so,
+ * do the move in dpLattice. (Still not applied in dpPolymerSystem!)
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
@@ -438,7 +440,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     uint8_t             * const dpLattice       ,
     cudaTextureObject_t   const texSpeciesIndices,
     uint32_t              const nMonomers        ,
-    cudaTextureObject_t   const texLatticeTmpRef
+    cudaTextureObject_t   const texLatticeTmp
 )
 {
     int const linId = blockIdx.x * blockDim.x + threadIdx.x;
@@ -452,24 +454,40 @@ __global__ void kernelSimulationScBFMPerformSpecies
     intCUDA  const x0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+0 );
     intCUDA  const y0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
     intCUDA  const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
+
     uintCUDA const direction = ( properties & 28 ) >> 2; // 28 == 0b11100
 
     intCUDA const dx = DXTable_d[ direction ];
     intCUDA const dy = DYTable_d[ direction ];
     intCUDA const dz = DZTable_d[ direction ];
 
-    if ( checkFront( texLatticeTmpRef, x0, y0, z0, direction ) )
+    if ( checkFront( texLatticeTmp, x0, y0, z0, direction ) )
         return;
 
-    // everything fits -> perform the move - add the information
-    //dpPolymerSystem[ 4*iMonomer+0 ] = x0 + dx;
-    //dpPolymerSystem[ 4*iMonomer+1 ] = y0 + dy;
-    //dpPolymerSystem[ 4*iMonomer+2 ] = z0 + dz;
+    /* If possible, perform move now on normal lattice */
     dpPolymerSystem[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
     dpLattice[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
-    dpLattice[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
+    dpLattice[ linearizeBoxVectorIndex( x0   , y0   , z0    ) ] = 0;
+    /* We can't clean the temporary lattice in here, because it still is being
+     * used for checks. For cleaning we need only the new positions.
+     * Every thread reads and writes to the same index in dpPolymerSystem.
+     * From these statements follow, that we can already move the monomers
+     * in this kernel, but have to watch out how we clean the temporary
+     * lattice in the new kernel. For some reason it doesn't work in practice
+     * though ??? ??? */
+#define TEST_EARLIER_APPLY 0
+#if TEST_EARLIER_APPLY > 0
+    dpPolymerSystem[ 4*iMonomer+0 ] = x0 + dx;
+    dpPolymerSystem[ 4*iMonomer+1 ] = y0 + dy;
+    dpPolymerSystem[ 4*iMonomer+2 ] = z0 + dz;
+#endif
 }
 
+/**
+ * Apply move to dpPolymerSystem and clean the temporary lattice of moves
+ * which seemed like they would work, but did clash with another parallel
+ * move, unfortunately.
+ */
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
     intCUDA             * const dpPolymerSystem ,
@@ -492,30 +510,26 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     intCUDA const y0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
     intCUDA const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
 
-    //select random direction
+#if TEST_EARLIER_APPLY > 0
+    dpLatticeTmp[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
+#else
     uintCUDA const direction = ( properties & 28 ) >> 2;
 
-    //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
     intCUDA const dx = DXTable_d[ direction ];
     intCUDA const dy = DYTable_d[ direction ];
     intCUDA const dz = DZTable_d[ direction ];
 
-    // possible move but not allowed
-    if ( ( properties & 3 ) == 1 )
-    {
-        dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
-        dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
-    }
-    else //allowed move with all circumstance
+    /* possible move which clashes with another parallely moved monomer
+     * Clean up the temporary lattice with these moves. */
+    if ( ( properties & 3 ) == 3 )  // 3=0b11
     {
         dpPolymerSystem[ 4*iMonomer+0 ] = x0 + dx;
         dpPolymerSystem[ 4*iMonomer+1 ] = y0 + dy;
         dpPolymerSystem[ 4*iMonomer+2 ] = z0 + dz;
-        dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
-        dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
     }
-    // everything fits -> perform the move - add the information
-    //  dpPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
+    dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
+#endif
+    dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
 }
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()

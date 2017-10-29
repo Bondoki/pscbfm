@@ -79,6 +79,11 @@ private:
      *  c   ... charged: 0 no, 1: yes
      *  nnr ... number of neighbors, this will get populated from LeMonADE's
      *          get get
+     *  move ... Bit 0 set by kernelCheckSpecies if move was found to be possible
+     *           Bit 1 set by kernelPerformSpecies if move still possible
+     *           heeding the new locations of all particles.
+     *           If both bits set, the move gets applied to polymerSystem in
+     *           kernelZeroArrays
      * The saved location is used as the lower left front corner when
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
