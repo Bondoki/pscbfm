@@ -5,6 +5,7 @@
  *      Author: Ron Dockhorn
  */
 
+#include "UpdaterGPUScBFM_AB_Type.h"
 
 #include <cstdio>                           // printf
 #include <cstdlib>                          // exit
@@ -16,7 +17,6 @@
 #include <sstream>
 
 #include "cudacommon.hpp"
-#include "UpdaterGPUScBFM_AB_Type.h"
 
 #define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
 
@@ -576,8 +576,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     if ( nMonomersSpeciesA + nMonomersSpeciesB != nAllMonomers )
         throw std::runtime_error( "Nr Of MonomerSpezies does not add up! Exiting... \n");
 
-    MonomersSpeziesIdx_A_host = (uint32_t *) malloc( nMonomersSpeciesA * sizeof(uint32_t) );
-    MonomersSpeziesIdx_B_host = (uint32_t *) malloc( nMonomersSpeciesB * sizeof(uint32_t) );
+    mMonomerIdsA = new MirroredTexture< uint32_t >( nMonomersSpeciesA );
+    mMonomerIdsB = new MirroredTexture< uint32_t >( nMonomersSpeciesB );
 
     /* sort monomers (their indices) into corresponding species array  */
     uint32_t nMonomersWrittenA = 0;
@@ -585,25 +585,24 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         if ( pMonomerSpecies[i] == 1 )
-            MonomersSpeziesIdx_A_host[ nMonomersWrittenA++ ] = i;
+            mMonomerIdsA->host[ nMonomersWrittenA++ ] = i;
         else if ( pMonomerSpecies[i] == 2 )
-            MonomersSpeziesIdx_B_host[ nMonomersWrittenB++ ] = i;
+            mMonomerIdsB->host[ nMonomersWrittenB++ ] = i;
     }
     if ( nMonomersSpeciesA != nMonomersWrittenA )
-        throw std::runtime_error( "Number of monomers copeid for species A does not add up! Exiting... \n" );
+        throw std::runtime_error( "Number of monomers copeid for species A does not add up!" );
     if ( nMonomersSpeciesB != nMonomersWrittenB )
-        throw std::runtime_error( "Number of monomers copeid for species B does not add up! Exiting... \n" );
+        throw std::runtime_error( "Number of monomers copeid for species B does not add up!" );
+     mMonomerIdsA->push();
+     mMonomerIdsB->push();
 
-    /* move species tables to GPU */
-    CUDA_CHECK( cudaMalloc((void **) &MonomersSpeziesIdx_A_device, (nMonomersSpeciesA)*sizeof(uint32_t)) );
-    CUDA_CHECK( cudaMalloc((void **) &MonomersSpeziesIdx_B_device, (nMonomersSpeciesB)*sizeof(uint32_t)) );
-    CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_A_device, MonomersSpeziesIdx_A_host, (nMonomersSpeciesA)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
-    CUDA_CHECK( cudaMemcpy( MonomersSpeziesIdx_B_device, MonomersSpeziesIdx_B_host, (nMonomersSpeciesB)*sizeof(uint32_t), cudaMemcpyHostToDevice) );
-
-
-    /****************************copy monomer informations ********************************************/
-    mPolymerSystem_host =(intCUDA *) malloc((4*nAllMonomers+1)*sizeof(intCUDA));
-    std::cout << "try to allocate : " << ((4*nAllMonomers+1)*sizeof(intCUDA)) << " bytes = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0)) << " kB = " << ((4*nAllMonomers+1)*sizeof(intCUDA)/(1024.0*1024.0)) << " MB coordinates on GPU " << std::endl;
+    /* copy monomer informations */
+    mPolymerSystem_host = (intCUDA *) malloc( ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
+    std::cout
+        << "try to allocate : " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA )
+        << " bytes = " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) / 1024.0
+        << " kB = " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) / ( 1024.0*1024.0 )
+        << " MB coordinates on GPU " << std::endl;
 
     /* copy [ x0,y0,z0, x1 ... ] -> [ x0,y0,z0,p0, x1 ...]. Might be
      * an idea to use cudaMemcpy2D to transfer this strided array to GPU.
@@ -621,10 +620,13 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
     int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
-
-    std::cout << "size of struct MonoInfo: " << sizeof(MonoInfo) << " bytes = " << (sizeof(MonoInfo)/(1024.0)) <<  "kB for one monomer connectivity " << std::endl;
-
-    std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = " << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0)) <<  "MB for connectivity matrix on GPU " << std::endl;
+    std::cout
+        << "size of struct MonoInfo: " << sizeof(MonoInfo)
+        << " bytes = " << (sizeof(MonoInfo)/(1024.0))
+        <<  "kB for one monomer connectivity " << std::endl;
+    std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = "
+        << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0))
+        <<  "MB for connectivity matrix on GPU " << std::endl;
 
 
     MonoInfo_host=(MonoInfo*) calloc(nAllMonomers,sizeof(MonoInfo));
@@ -696,20 +698,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     resDescA.resType                = cudaResourceTypeLinear;
     resDescA.res.linear.desc.f      = cudaChannelFormatKindUnsigned;
     resDescA.res.linear.desc.x      = 32; // bits per channel
-    cudaResourceDesc resDescB = resDescA;
     cudaResourceDesc resDescRefOut = resDescA;
-    resDescA.res.linear.devPtr      = MonomersSpeziesIdx_A_device;
-    resDescA.res.linear.sizeInBytes = nMonomersSpeciesA * sizeof( uint32_t );
-    resDescB.res.linear.devPtr      = MonomersSpeziesIdx_B_device;
-    resDescB.res.linear.sizeInBytes = nMonomersSpeciesB * sizeof( uint32_t );
 
     cudaTextureDesc texDescROM;
     memset( &texDescROM, 0, sizeof( texDescROM ) );
     texDescROM.readMode = cudaReadModeElementType;
-
-    /* the last three arguments are pointers to constants! */
-    cudaCreateTextureObject( &texSpeciesIndicesA, &resDescA, &texDescROM, NULL );
-    cudaCreateTextureObject( &texSpeciesIndicesB, &resDescB, &texDescROM, NULL );
 
     /* lattice textures */
     resDescRefOut.res.linear.desc.x = 8; // bits per channel
@@ -827,6 +820,26 @@ void UpdaterGPUScBFM_AB_Type::setNetworkIngredients( uint32_t numPEG, uint32_t n
         //    throw std::runtime_error("nMonomersPerStarArm should be an odd number! Exiting...\n");
 }
 
+void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
+(
+    uint32_t const i,
+    int32_t  const x,
+    int32_t  const y,
+    int32_t  const z
+)
+{
+    if ( false )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setMonomerCoordinates" << "] "
+            << "One or more of the given coordinates is outside the box!";
+        throw std::invalid_argument( msg.str() );
+    }
+    mPolymerSystem[ 3*i+0 ] = x;
+    mPolymerSystem[ 3*i+1 ] = y;
+    mPolymerSystem[ 3*i+2 ] = z;
+}
+
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
     uint32_t const iMonomer1,
@@ -853,6 +866,19 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     uint32_t const boxZ
 )
 {
+    if ( ! ( inRange< intCUDA >( boxX ) &&
+             inRange< intCUDA >( boxY ) &&
+             inRange< intCUDA >( boxZ )    ) )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setLatticeSize" << "] "
+            << "The box size (" << boxX << "," << boxY << "," << boxZ
+            << ") is larger than the internal integer data type for "
+            << "representing positions! ( " << std::numeric_limits< intCUDA >::min()
+            << " <= size <= " << std::numeric_limits< intCUDA >::max() << ")";
+        throw std::invalid_argument( msg.str() );
+    }
+
     mBoxX   = boxX;
     mBoxY   = boxY;
     mBoxZ   = boxZ;
@@ -1023,20 +1049,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        MonoInfo_device, texSpeciesIndicesA,
+                        MonoInfo_device, mMonomerIdsA->mTexture,
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
-                        texSpeciesIndicesA, nMonomersSpeciesA,
+                        mMonomerIdsA->mTexture, nMonomersSpeciesA,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        texSpeciesIndicesA, nMonomersSpeciesA
+                        mMonomerIdsA->mTexture, nMonomersSpeciesA
                     );
                     break;
 
@@ -1044,20 +1070,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        MonoInfo_device, texSpeciesIndicesB,
+                        MonoInfo_device, mMonomerIdsB->mTexture,
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
                         texLatticeRefOut
                     );
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut_device,
-                        texSpeciesIndicesB, nMonomersSpeciesB,
+                        mMonomerIdsB->mTexture, nMonomersSpeciesB,
                         texLatticeTmpRef
                     );
                     kernelSimulationScBFMZeroArraySpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp_device,
-                        texSpeciesIndicesB, nMonomersSpeciesB
+                        mMonomerIdsB->mTexture, nMonomersSpeciesB
                     );
                     break;
 
@@ -1176,24 +1202,19 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
 
     //unbind texture reference to free resource
     cudaUnbindTexture( texPolymerAndMonomerIsEvenAndOnXRef );
-    cudaDestroyTextureObject( texSpeciesIndicesA );
-    cudaDestroyTextureObject( texSpeciesIndicesB );
-    texSpeciesIndicesA = 0;
-    texSpeciesIndicesB = 0;
 
     //free memory on GPU
     cudaFree( mLatticeOut_device          );
     cudaFree( mLatticeTmp_device          );
     cudaFree( mPolymerSystem_device       );
     cudaFree( MonoInfo_device             );
-    cudaFree( MonomersSpeziesIdx_A_device );
-    cudaFree( MonomersSpeziesIdx_B_device );
 
     //free memory on CPU
     free( mPolymerSystem_host       );
     free( MonoInfo_host             );
     free( mLatticeOut_host          );
     free( mLatticeTmp_host          );
-    free( MonomersSpeziesIdx_A_host );
-    free( MonomersSpeziesIdx_B_host );
+
+    delete mMonomerIdsA; mMonomerIdsA = NULL;
+    delete mMonomerIdsB; mMonomerIdsB = NULL;
 }

@@ -1,6 +1,6 @@
-cmake_minimum_required (VERSION 2.8)
+cmake_minimum_required( VERSION 2.8 )
 
-FIND_PACKAGE(CUDA REQUIRED)
+FIND_PACKAGE( CUDA REQUIRED )
 
 #INCLUDE(FindCUDA)
 #set(CUDA_INSTALL_PATH  /usr/local/cuda)
@@ -24,15 +24,15 @@ FIND_PACKAGE(CUDA REQUIRED)
 #SET(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -lineinfo -gencode arch=compute_60,code=sm_60)
 
 
-set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --compiler-bindir /usr/bin/g++-4.9 )
+set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --compiler-bindir /usr/bin/g++-4.9 -std=c++11 )
 set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -lineinfo -gencode arch=compute_30,code=sm_30 )
 
 
-if (NOT DEFINED LEMONADE_INCLUDE_DIR)
+if( NOT DEFINED LEMONADE_INCLUDE_DIR )
     message("LEMONADE_INCLUDE_DIR is not provided. If build fails, use -DLEMONADE_INCLUDE_DIR=/path/to/LeMonADE/headers/ or install to default location")
 endif()
 
-if (NOT DEFINED LEMONADE_LIBRARY_DIR)
+if( NOT DEFINED LEMONADE_LIBRARY_DIR )
     message("LEMONADE_LIBRARY_DIR is not provided. If build fails, use -DLEMONADE_LIBRARY_DIR=/path/to/LeMonADE/lib/ or install to default location")
 endif()
 
@@ -48,9 +48,6 @@ cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type UpdaterGPUScBFM_AB_Type.cu )
 if( ( NOT DEFINED project_build_static ) OR ( project_build_static ) )
     target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type mainCUDASimulatorGPUScBFM_AB_Type libLeMonADE-static )
 else()
-    link_directories ("${LEMONADE_LIBRARY_DIR}")
+    link_directories( "${LEMONADE_LIBRARY_DIR}" )
     target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type mainCUDASimulatorGPUScBFM_AB_Type LeMonADE )
 endif()
-
-
-

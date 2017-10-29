@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdio>
-#include <cstdlib>                      // memset
+#include <cstdlib>                      // NULL, malloc, free, memset
 #include <cassert>
 #include <cstdlib>                      // EXIT_FAILURE, exit
 #include <iostream>
@@ -9,8 +9,12 @@
 #include <stdint.h>                     // uint64_t
 #include <sstream>
 
-#include <cuda.h>                       // not needed if compiled with nvcc
 
+
+#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
+
+/* https://stackoverflow.com/questions/8796369/cuda-and-nvcc-using-the-preprocessor-to-choose-between-float-or-double */
+#if defined( __CUDACC__ )
 
 inline void checkCudaError
 (
@@ -28,9 +32,16 @@ inline void checkCudaError
     }
 }
 
-#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 #define CUDA_ERROR(X) checkCudaError( X, __FILENAME__, __LINE__ );
 #define CUDA_CHECK(X) checkCudaError( X, __FILENAME__, __LINE__ );
+
+#endif
+
+#if ! defined( __CUDACC__ ) && ! defined( __host__ ) && ! defined( __device__ )
+#   define __host__
+#   define __device__
+#endif
+
 
 
 template< typename T, typename S >
@@ -42,6 +53,9 @@ inline T ceilDiv( T a, S b )
     assert( b == b );
     return (a+b-1)/b;
 }
+
+
+#if defined( __CUDACC__ )
 
 /**
  * Chooses an optimal configuration for number of blocks and number of threads
@@ -176,10 +190,12 @@ inline __device__ long long unsigned int getGridSize( void )
     return gridDim.x * gridDim.y * gridDim.z;
 }
 
+#endif
+
 
 #include <cassert>
 #include <cstdio>               // printf, fflush
-#include <cstdlib>              // NULL, malloc, free
+#include <cstdlib>              //
 
 
 /**
@@ -256,6 +272,9 @@ inline std::string getCudaCodeName
         return "Volta";
     return 0; /* unknown, could also throw exception */
 }
+
+
+#if defined( __CUDACC__ )
 
 /**
  * @return flops (not GFlops, ... )
@@ -371,6 +390,8 @@ inline void getCudaDeviceProperties
     }
 }
 
+#endif
+
 #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ < 600
 /**
  * atomicAdd for double is not natively implemented, because it's not
@@ -395,6 +416,15 @@ double atomicAdd( double* address, double val )
 #endif
 
 
+template< class T >
+class MirroredVector;
+
+template< class T >
+class MirroredTexture;
+
+
+#if defined( __CUDACC__ )
+
 /**
  * https://stackoverflow.com/questions/10535667/does-it-make-any-sense-to-use-inline-keyword-with-templates
  */
@@ -402,12 +432,14 @@ template< class T >
 class MirroredVector
 {
 public:
-    T *                host, gpu;
-    size_t       const nBytes ;
-    cudaStream_t const mStream;   /* not implemented yet */
+    T *                host     ;
+    T *                gpu      ;
+    size_t       const nElements;
+    size_t       const nBytes   ;
+    cudaStream_t const mStream  ;   /* not implemented yet */
 
     inline MirroredVector()
-     : host( NULL ), gpu( NULL ), nBytes( 0 ), mStream( 0 )
+     : host( NULL ), gpu( NULL ), nElements( 0 ), nBytes( 0 ), mStream( 0 )
     {}
 
     inline void malloc()
@@ -416,7 +448,7 @@ public:
             host = (T*) ::malloc( nBytes );
         if ( gpu == NULL )
             CUDA_ERROR( cudaMalloc( (void**) &gpu, nBytes ) );
-        if ( host != NULL || gpu != NULL )
+        if ( ! ( host != NULL && gpu != NULL ) )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::MirroredVector::malloc] "
@@ -432,14 +464,20 @@ public:
         size_t const rnElements,
         cudaStream_t rStream = 0
     )
-     : host( NULL ), gpu( NULL ), nBytes( rnElements * sizeof(T) ), mStream( rStream )
+     : host( NULL ), gpu( NULL ), nElements( rnElements ),
+       nBytes( rnElements * sizeof(T) ), mStream( rStream )
     {
         this->malloc();
     }
 
+    /**
+     * Uses async, but not that by default the memcpy gets queued into the
+     * same stream as subsequent kernel calls will, so that a synchronization
+     * will be implied
+     */
     inline void push( void ) const
     {
-        if ( host != NULL || gpu != NULL || nBytes == 0 )
+        if ( ! ( host != NULL || gpu != NULL || nBytes == 0 ) )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::MirroredVector::push] "
@@ -448,13 +486,14 @@ public:
                 << ", nBytes=" << nBytes << std::endl;
             throw std::runtime_error( msg.str() );
         }
-        CUDA_ERROR( cudaMemcpyAsync( (void*) gpu, (void*) host, nBytes, cudaMemcpyHostToDevice, mStream ) );
+        CUDA_ERROR( cudaMemcpyAsync( (void*) gpu, (void*) host, nBytes,
+                                     cudaMemcpyHostToDevice, mStream ) );
         CUDA_ERROR( cudaPeekAtLastError() );
     }
 
     inline void pop( void ) const
     {
-        if ( host != NULL || gpu != NULL || nBytes == 0 )
+        if ( ! ( host != NULL || gpu != NULL || nBytes == 0 ) )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::MirroredVector::pop] "
@@ -463,7 +502,8 @@ public:
                 << ", nBytes=" << nBytes << std::endl;
             throw std::runtime_error( msg.str() );
         }
-        CUDA_ERROR( cudaMemcpyAsync( (void*) host, (void*) gpu, nBytes, cudaMemcpyDeviceToHost, mStream ) );
+        CUDA_ERROR( cudaMemcpyAsync( (void*) host, (void*) gpu, nBytes,
+                                     cudaMemcpyDeviceToHost, mStream ) );
         CUDA_ERROR( cudaPeekAtLastError() );
     }
 
@@ -501,7 +541,7 @@ public:
      * @see https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-kepler-texture-objects-improve-performance-and-flexibility/
      * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#texture-memory
      */
-    inline bind()
+    inline void bind()
     {
         memset( &mResDesc, 0, sizeof( mResDesc ) );
         /**
@@ -521,8 +561,8 @@ public:
          */
         mResDesc.res.linear.desc.f      = cudaChannelFormatKindUnsigned;
         mResDesc.res.linear.desc.x      = sizeof(T) * 8; // bits per channel
-        mResDesc.res.linear.devPtr      = gpu;
-        mResDesc.res.linear.sizeInBytes = nBytes;
+        mResDesc.res.linear.devPtr      = this->gpu;
+        mResDesc.res.linear.sizeInBytes = this->nBytes;
 
         memset( &mTexDesc, 0, sizeof( mTexDesc ) );
         /**
@@ -543,7 +583,7 @@ public:
         size_t const rnElements,
         cudaStream_t rStream = 0
     )
-     : MirroredVector( rnElements, rStream ), mTexture( 0 )
+     : MirroredVector<T>( rnElements, rStream ), mTexture( 0 )
     {
         this->bind();
     }
@@ -554,7 +594,9 @@ public:
         mTexture = 0;
         this->free();
     }
-}
+};
+
+#endif
 
 
 template< class T > __device__ inline void swap( T & a, T & b )
@@ -565,7 +607,7 @@ template< class T > __device__ inline void swap( T & a, T & b )
 }
 
 
-__device__ inline
+__host__ __device__ inline
 int snprintFloat
 (
     char        * const msg  ,
@@ -578,7 +620,7 @@ int snprintFloat
 }
 
 template< typename T >
-__device__ inline
+__host__ __device__ inline
 int snprintInt
 (
     char             * const msg  ,
@@ -632,7 +674,7 @@ int snprintInt
     return nCharsWritten;
 }
 
-__device__ inline
+__host__ __device__ inline
 int snprintFloatArray
 (
     char        * const msg  ,
@@ -654,3 +696,100 @@ int snprintFloatArray
     msg[ nCharsWritten ] = '\0';
     return nCharsWritten;
 }
+
+#include <sstream>
+#include <string>
+#include <vector>
+
+std::string prettyPrintBytes
+(
+    size_t       bytes,
+    bool   const logical = true
+)
+{
+    char const suffixes[] = { ' ', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y' };
+    std::stringstream out;
+    std::vector< size_t > parts;
+    for ( unsigned i = 0u; i < sizeof( suffixes ); ++i )
+    {
+        parts.push_back( bytes % size_t( 1024 ) );
+        bytes /= size_t( 1024 );
+        if ( bytes == 0 )
+            break;
+    }
+    for ( int i = sizeof( suffixes )-1; i >= 0; --i )
+    {
+        if ( i != sizeof( suffixes )-1 && parts.at(i) == 0 )
+            continue;
+        out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" )
+            << "B" << ( i > 0 ? " " : "" );
+    }
+    return out.str();
+}
+
+#if __cplusplus >= 201103
+
+/**
+ * @see https://stackoverflow.com/questions/18625964/checking-if-an-input-is-within-its-range-of-limits-in-c
+ */
+#include <limits>
+
+template< typename T_Range, typename T_Value, bool T_RangeSigned, bool T_ValueSigned >
+struct InIntegerRange;
+
+template< typename T_Range, typename T_Value >
+struct InIntegerRange< T_Range, T_Value, false, false >
+{
+    bool operator()( T_Value const & x )
+    {
+        return x >= std::numeric_limits< T_Range >::min() &&
+               x <= std::numeric_limits< T_Range >::max();
+    }
+};
+
+template< typename T_Range, typename T_Value >
+struct InIntegerRange< T_Range, T_Value, false, true >
+{
+    bool operator()( T_Value const & x )
+    {
+        return x >= 0 && x <= std::numeric_limits< T_Range >::max();
+    }
+};
+
+template< typename T_Range, typename T_Value >
+struct InIntegerRange< T_Range, T_Value, true, false >
+{
+    bool operator()( T_Value const & x )
+    {
+        return x <= std::numeric_limits< T_Range >::max(); /* x >= 0 is given */
+    }
+};
+
+template< typename T_Range, typename T_Value >
+struct InIntegerRange< T_Range, T_Value, true, true >
+{
+    bool operator()( T_Value const & x )
+    {
+        return x >= std::numeric_limits< T_Range >::min() &&
+               x <= std::numeric_limits< T_Range >::max();
+    }
+};
+
+template< typename T_Range, typename T_Value >
+inline bool inRange( T_Value const & x )
+{
+    if( std::numeric_limits< T_Range >::is_integer )
+    {
+        return InIntegerRange< T_Range, T_Value,
+                               std::numeric_limits< T_Range >::is_signed,
+                               std::numeric_limits< T_Value >::is_signed >()( x );
+    }
+    else
+    {
+        return ( x > 0 ? x : -x ) <= std::numeric_limits< T_Range >::max() ||
+               ( std::isnan(x) && std::numeric_limits< T_Range >::has_quiet_NaN ) ||
+               ( std::isinf(x) && std::numeric_limits< T_Range >::has_infinity );
+    }
+}
+
+#endif

@@ -14,6 +14,8 @@
 
 #include <LeMonADE/utility/RandomNumberGenerators.h>
 
+#include "cudacommon.hpp"
+
 
 
 /* This is still used, at least the 32 bit version! */
@@ -65,6 +67,8 @@ private:
      * Actually an array of nMonomers * 3 lengths, stores the lower left front
      * point of the 2x2x2 monomer inside the lattice.
      */
+     /* CURRENTLY WORKING ON THIS !! just cut the intermediary crap and
+      * add a check to setMonomerCoordinates */
     int32_t  * mPolymerSystem;
     intCUDA  * mPolymerSystem_device;
     intCUDA  * mPolymerSystem_host;
@@ -98,14 +102,8 @@ private:
     /* stores connectivity information for the monomers */
     MonoInfo * MonoInfo_host, *MonoInfo_device;
 
-    uint32_t * MonomersSpeziesIdx_A_host;
-    uint32_t * MonomersSpeziesIdx_B_host;
-
-    uint32_t * MonomersSpeziesIdx_A_device;
-    uint32_t * MonomersSpeziesIdx_B_device;
-
-    uint32_t   nMonomersSpeciesA;
-    uint32_t   nMonomersSpeciesB;
+    uint32_t nMonomersSpeciesA, nMonomersSpeciesB;
+    MirroredTexture< uint32_t > * mMonomerIdsA, * mMonomerIdsB;
 
     uint32_t linearizeBoxVectorIndex
     (
@@ -120,7 +118,7 @@ private:
     void checkSystem();
 
 public:
-    UpdaterGPUScBFM_AB_Type(){};
+    UpdaterGPUScBFM_AB_Type(){}
     virtual ~UpdaterGPUScBFM_AB_Type();
 
     void initialize( int iGpuToUse );
@@ -132,12 +130,7 @@ public:
     inline void setAttribute( uint32_t i, int32_t attribute ){ mAttributeSystem[i] = attribute; }
     void setNrOfAllMonomers( uint32_t nAllMonomers );
     void setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL );
-    inline void setMonomerCoordinates( uint32_t i, int32_t x, int32_t y, int32_t z )
-    {
-        mPolymerSystem[ 3*i+0 ] = x;
-        mPolymerSystem[ 3*i+1 ] = y;
-        mPolymerSystem[ 3*i+2 ] = z;
-    }
+    void setMonomerCoordinates( uint32_t i, int32_t x, int32_t y, int32_t z );
     void setConnectivity( uint32_t monoidx1, uint32_t monoidx2 );
     void setLatticeSize( uint32_t boxX, uint32_t boxY, uint32_t boxZ );
 
