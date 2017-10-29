@@ -4,7 +4,7 @@ function checkSc()
     sTime=$( date +%Y-%m-%dT%H-%M-%S )
     logFile=run-$name-$sTime.log
     rm result.bfm
-    cmake -DINSTALLDIR_LEMONADE="$( cd .. && pwd )/install" .. &&
+    cmake -DCMAKE_BUILD_TYPE=Release -DINSTALLDIR_LEMONADE="$( cd .. && pwd )/install" .. &&
     make &&
     #time "./bin/$name" ../../test-files/Melt_N512_nc1024_LeMonADe_GPU_RKC_ScBFM.bfm 1000 1000 result.bfm |
     "./bin/$name" -i ../../test-files/Melt_N512_nc1024_LeMonADe_GPU_RKC_ScBFM.bfm -m 1000 -s 1000 -o result.bfm -e seeds.dat -g 1 |
