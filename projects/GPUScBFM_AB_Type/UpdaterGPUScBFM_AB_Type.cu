@@ -1202,16 +1202,8 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
 {
     /* copy information / results from GPU to Host. Actually not really
      * needed, because this is done after each kernel run i.e. the only thing
-     * which should be able to touch the GPU data. */
+     * which should be able to touch the GPU data. (already deleted mPolymerSystem!) */
     CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut_device, mBoxX * mBoxY * mBoxZ * sizeof(uint8_t), cudaMemcpyDeviceToHost ) );
-    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, (4*nAllMonomers+1)*sizeof(intCUDA), cudaMemcpyDeviceToHost ) );
-    for ( uint32_t i= 0 ; i < nAllMonomers; ++i )
-    {
-        mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
-        mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
-        mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
-    }
-    checkSystem();
 
     /* check whether connectivities on GPU got corrupted */
     int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
@@ -1219,12 +1211,12 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         //if(MonoInfo_host[i].size != mNeighbors[i].size)
-        if (  ( ( mPolymerSystem_host[4*i+3] & 224 ) >> 5 ) != mNeighbors[i].size )
+        if (  ( ( mPolymerSystem_host[ 4*i+3 ] & 224 ) >> 5 ) != mNeighbors[i].size )
         {
             std::cout << "connectivity error after simulation run" << std::endl;
             std::cout << "mono:" << i << " vs " << (i) << std::endl;
             //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
-            std::cout << "numElements:" << ((mPolymerSystem_host[4*i+3]&224)>>5) << " vs " << mNeighbors[i].size << std::endl;
+            std::cout << "numElements:" << ((mPolymerSystem_host[ 4*i+3 ]&224 )>>5) << " vs " << mNeighbors[i].size << std::endl;
 
             throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
         }
@@ -1243,21 +1235,17 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     }
     std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
-    //unbind texture reference to free resource
-    cudaUnbindTexture( mPolymerSystem_texture );
-
-    //free memory on GPU
     cudaFree( mLatticeOut_device          );
     cudaFree( mLatticeTmp_device          );
     cudaFree( mPolymerSystem_device       );
     cudaFree( MonoInfo_device             );
 
-    //free memory on CPU
     free( mPolymerSystem_host       );
     free( MonoInfo_host             );
     free( mLatticeOut_host          );
     free( mLatticeTmp_host          );
 
-    delete mMonomerIdsA; mMonomerIdsA = NULL;
-    delete mMonomerIdsB; mMonomerIdsB = NULL;
+    if ( mPolymerSystem != NULL ){ delete[] mPolymerSystem; mPolymerSystem = NULL; }
+    if ( mMonomerIdsA   != NULL ){ delete[] mMonomerIdsA  ; mMonomerIdsA   = NULL; }
+    if ( mMonomerIdsB   != NULL ){ delete[] mMonomerIdsB  ; mMonomerIdsB   = NULL; }
 }
