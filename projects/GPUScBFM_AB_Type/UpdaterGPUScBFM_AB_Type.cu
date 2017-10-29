@@ -55,31 +55,10 @@ __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
  *  objects instead of texture references completely removes this overhead."
  * -> wow !!!
  */
-/**
- * Contains the particles as well as a property tag for each:
- *   [ x0, y0, z0, p0, x1, y1, z1, p1, ... ]
- * The propertie tags p are bit packed:
- *                        8  7  6  5  4  3  2  1  0
- * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
- * | unused |  |  |  |  |c |   nnr  |  dir   |move |
- * +--------+--+--+--+--+--+--+--+--+--+--+--+--+--+
- *  c   ... charged: 0 no, 1: yes
- *  nnr ... number of neighbors, this will get populated from LeMonADE's
- *          get get
- */
 texture< intCUDA, cudaTextureType1D, cudaReadModeElementType > mPolymerSystem_texture;
 
 cudaTextureObject_t texLatticeRefOut = 0;
 cudaTextureObject_t texLatticeTmpRef = 0;
-
-/**
- * These are arrays containing the monomer indices for the respective
- * species (sorted ascending). E.g. for AABABBA this would be:
- * texSpeciesIndicesA = { 0,1,3,6 }
- * texSpeciesIndicesB = { 1,4,5 }
- */
-cudaTextureObject_t texSpeciesIndicesA = 0;
-cudaTextureObject_t texSpeciesIndicesB = 0;
 
 
 
@@ -409,12 +388,12 @@ __global__ void kernelSimulationScBFMCheckSpecies
     intCUDA  const properties = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+3 );
 
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-    uintCUDA const random_int = hash( hash( linId ) ^ rSeed ) % 6;
+    uintCUDA const direction = hash( hash( linId ) ^ rSeed ) % 6;
 
      /* select random direction. Do this with bitmasking instead of lookup ??? */
-    intCUDA const dx = DXTable_d[ random_int ];
-    intCUDA const dy = DYTable_d[ random_int ];
-    intCUDA const dz = DZTable_d[ random_int ];
+    intCUDA const dx = DXTable_d[ direction ];
+    intCUDA const dy = DYTable_d[ direction ];
+    intCUDA const dz = DZTable_d[ direction ];
 
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
@@ -438,7 +417,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
             return;
     }
 
-    if ( checkFront( texLatticeRefOut, x0, y0, z0, random_int ) )
+    if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
         return;
 
     // everything fits -> perform the move - add the information
@@ -449,7 +428,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
      * texture used above. Won't this result in read-after-write race-conditions?
      * Then again the written / changed bits are never used in the above code ... */
-    dpPolymerSystem[ 4*iMonomer+3 ] = properties | ((random_int<<2)+1);
+    dpPolymerSystem[ 4*iMonomer+3 ] = properties | ( ( direction << 2 ) + 1 );
     dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
 }
 
@@ -473,19 +452,19 @@ __global__ void kernelSimulationScBFMPerformSpecies
     intCUDA  const x0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+0 );
     intCUDA  const y0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+1 );
     intCUDA  const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
-    uintCUDA const random_int = ( properties & 28 ) >> 2; // 28 == 0b11100
+    uintCUDA const direction = ( properties & 28 ) >> 2; // 28 == 0b11100
 
-    intCUDA const dx = DXTable_d[ random_int ];
-    intCUDA const dy = DYTable_d[ random_int ];
-    intCUDA const dz = DZTable_d[ random_int ];
+    intCUDA const dx = DXTable_d[ direction ];
+    intCUDA const dy = DYTable_d[ direction ];
+    intCUDA const dz = DZTable_d[ direction ];
 
-    if ( checkFront( texLatticeTmpRef, x0, y0, z0, random_int ) )
+    if ( checkFront( texLatticeTmpRef, x0, y0, z0, direction ) )
         return;
 
     // everything fits -> perform the move - add the information
-    //mPolymerSystem_d[ 4*iMonomer+0 ] = x0 + dx;
-    //mPolymerSystem_d[ 4*iMonomer+1 ] = y0 + dy;
-    //mPolymerSystem_d[ 4*iMonomer+2 ] = z0 + dz;
+    //dpPolymerSystem[ 4*iMonomer+0 ] = x0 + dx;
+    //dpPolymerSystem[ 4*iMonomer+1 ] = y0 + dy;
+    //dpPolymerSystem[ 4*iMonomer+2 ] = z0 + dz;
     dpPolymerSystem[ 4*iMonomer+3 ] = properties | 2; // indicating allowed move
     dpLattice[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
     dpLattice[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
@@ -514,12 +493,12 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     intCUDA const z0 = tex1Dfetch( mPolymerSystem_texture, 4*iMonomer+2 );
 
     //select random direction
-    uintCUDA const random_int = ( properties & 28 ) >> 2;
+    uintCUDA const direction = ( properties & 28 ) >> 2;
 
     //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-    intCUDA const dx = DXTable_d[ random_int ];
-    intCUDA const dy = DYTable_d[ random_int ];
-    intCUDA const dz = DZTable_d[ random_int ];
+    intCUDA const dx = DXTable_d[ direction ];
+    intCUDA const dy = DYTable_d[ direction ];
+    intCUDA const dz = DZTable_d[ direction ];
 
     // possible move but not allowed
     if ( ( properties & 3 ) == 1 )
@@ -536,64 +515,31 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
     }
     // everything fits -> perform the move - add the information
-    //  mPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
+    //  dpPolymerSystem_d[4*iMonomer+3] = properties & MASK5BITS; // delete the first 5 bits <- this comment was only for species B
 }
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 {
-    delete[] mLattice;
-    delete[] mPolymerSystem;
-    delete[] mAttributeSystem;
-    delete[] mNeighbors;
+    if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }
+    if ( mPolymerSystem   != NULL ){ delete[] mPolymerSystem  ; mPolymerSystem   = NULL; }
+    if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }
+    if ( mNeighbors       != NULL ){ delete[] mNeighbors      ; mNeighbors       = NULL; }
+    if ( mMonomerIdsA     != NULL ){ delete[] mMonomerIdsA    ; mMonomerIdsA     = NULL; }
+    if ( mMonomerIdsB     != NULL ){ delete[] mMonomerIdsB    ; mMonomerIdsB     = NULL; }
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 {
-    /**** Print some GPU information ****/
-    cudaDeviceProp prop;
-
     int nGpus;
-    CUDA_CHECK( cudaGetDeviceCount( &nGpus ) );
-
-    for ( int i = 0; i < nGpus; ++i )
-    {
-        CUDA_CHECK( cudaGetDeviceProperties( &prop, i ) );
-        printf( "   --- General Information for device %d ---\n", i );
-        printf( "Name:  %s\n", prop.name );
-        printf( "Compute capability:  %d.%d\n", prop.major, prop.minor );
-        printf( "Clock rate:  %d\n", prop.clockRate );
-        printf( "Device copy overlap: %s\n", prop.deviceOverlap ? "Enabled" : "Disabled" );
-        printf( "Kernel execution timeout : %s\n", prop.kernelExecTimeoutEnabled ? "Enabled" : "Disabled" );
-        printf( "   --- Memory Information for device %d ---\n", i );
-        printf( "Total global mem:  %ld\n", prop.totalGlobalMem );
-        printf( "Total constant Mem:  %ld\n", prop.totalConstMem );
-        printf( "Max mem pitch:  %ld\n", prop.memPitch );
-        printf( "Texture Alignment:  %ld\n", prop.textureAlignment );
-
-        printf( "   --- MP Information for device %d ---\n", i );
-        printf( "Multiprocessor count:  %d\n", prop.multiProcessorCount );
-        printf( "Shared mem per mp:  %ld\n", prop.sharedMemPerBlock );
-        printf( "Registers per mp:  %d\n", prop.regsPerBlock );
-        printf( "Threads in warp:  %d\n", prop.warpSize );
-        printf( "Max threads per block:  %d\n", prop.maxThreadsPerBlock );
-        printf( "Max thread dimensions:  (%d, %d, %d)\n",
-                prop.maxThreadsDim[0],
-                prop.maxThreadsDim[1],
-                prop.maxThreadsDim[2] );
-        printf( "Max grid dimensions:  (%d, %d, %d)\n",
-                prop.maxGridSize[0],
-                prop.maxGridSize[1],
-                prop.maxGridSize[2] );
-        printf( "\n" );
-    }
-
+    getCudaDeviceProperties( NULL, &nGpus, true /* pritn GPU information */ );
     if ( iGpuToUse >= nGpus )
     {
-        std::cout << "GPU with ID " << iGpuToUse << " not present. Only " << nGpus << " GPUs are available. Exiting..." << std::endl;
-        throw std::runtime_error( "Can not find GPU or GPU not present. Exiting..." );
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::initialize] "
+            << "GPU with ID " << iGpuToUse << " not present. "
+            << "Only " << nGpus << " GPUs are available.\n";
+        throw std::invalid_argument( msg.str() );
     }
-
-    /* choose GPU to use */
     CUDA_CHECK( cudaSetDevice( iGpuToUse ));
 
 
