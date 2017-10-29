@@ -613,26 +613,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
      mMonomerIdsA->push();
      mMonomerIdsB->push();
 
-    /* copy monomer informations */
-    mPolymerSystem_host = (intCUDA *) malloc( ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
-    std::cout
-        << "try to allocate : " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA )
-        << " bytes = " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) / 1024.0
-        << " kB = " << ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) / ( 1024.0*1024.0 )
-        << " MB coordinates on GPU " << std::endl;
-
-    /* copy [ x0,y0,z0, x1 ... ] -> [ x0,y0,z0,p0, x1 ...]. Might be
-     * an idea to use cudaMemcpy2D to transfer this strided array to GPU.
-     * At least for copying back the results, see below, but for this the
-     * property field actually will be set in the next few lines */
     CUDA_CHECK( cudaMalloc( (void **) &mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) ) );
-    for ( uint32_t i =0; i < nAllMonomers; ++i )
-    {
-        mPolymerSystem_host[ 4*i+0 ] = (intCUDA) mPolymerSystem[ 3*i+0 ];
-        mPolymerSystem_host[ 4*i+1 ] = (intCUDA) mPolymerSystem[ 3*i+1 ];
-        mPolymerSystem_host[ 4*i+2 ] = (intCUDA) mPolymerSystem[ 3*i+2 ];
-        mPolymerSystem_host[ 4*i+3 ] = 0;
-    }
 
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
@@ -660,7 +641,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
                 << "but monomer " << i << " has " << mNeighbors[i].size << "\n";
             throw std::invalid_argument( msg.str() );
         }
-        mPolymerSystem_host[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
+        mPolymerSystem[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
         for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
             MonoInfo_host[i].bondsMonomerIdx[u] = mNeighbors[i].bondsMonomerIdx[u];
     }
@@ -686,19 +667,19 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     for ( int t = 0; t < nAllMonomers; ++t )
     {
         #ifdef USEZCURVE
-            uint32_t xk = mPolymerSystem[ 3*t+0 ] & mBoxXM1;
-            uint32_t yk = mPolymerSystem[ 3*t+1 ] & mBoxYM1;
-            uint32_t zk = mPolymerSystem[ 3*t+2 ] & mBoxZM1;
+            uint32_t xk = mPolymerSystem[ 4*t+0 ] & mBoxXM1;
+            uint32_t yk = mPolymerSystem[ 4*t+1 ] & mBoxYM1;
+            uint32_t zk = mPolymerSystem[ 4*t+2 ] & mBoxZM1;
             uint32_t inter3 = interleave3( xk/2 , yk/2, zk/2 );
             mLatticeOut_host[ ( ( mPolymerSystem_host[ 4*t+3 ] & 1 ) << 23 ) + inter3 ] = 1;
         #else
-        mLatticeOut_host[ linearizeBoxVectorIndex( mPolymerSystem[ 3*t+0 ],
-                                                   mPolymerSystem[ 3*t+1 ],
-                                                   mPolymerSystem[ 3*t+2 ] ) ] = 1;
+        mLatticeOut_host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
+                                                   mPolymerSystem[ 4*t+1 ],
+                                                   mPolymerSystem[ 4*t+2 ] ) ] = 1;
         #endif
     }
     CUDA_CHECK( cudaMemcpy( mLatticeOut_device, mLatticeOut_host, mBoxX * mBoxY * mBoxZ * sizeof( *mLatticeOut_host ), cudaMemcpyHostToDevice ) );
-    CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem_host, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
 
     /* bind textures */
     cudaBindTexture( 0, mPolymerSystem_texture, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
@@ -725,34 +706,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     cudaCreateTextureObject( &texLatticeRefOut, &resDescRefOut, &texDescROM, NULL );
     cudaCreateTextureObject( &texLatticeTmpRef, &resDescTmpRef, &texDescROM, NULL );
 
-    /* The memory transfer is this complex because int16_t needs to be
-     * converted to int32_t if cudaInt == int16_t */
-    if ( sizeof( *mPolymerSystem ) == sizeof( *mPolymerSystem_device ) )
-    {
-        std::cerr << "[" << __FILENAME__ << "::initialize] Can use cudaMemcpy2D (untested!)\n";
-        throw std::runtime_error( "Untested. Uncomment if you work on it." );
-        CUDA_CHECK( cudaMemcpy2D(
-            mPolymerSystem       , 3 * sizeof( *mPolymerSystem ),
-            mPolymerSystem_device, 4 * sizeof( *mPolymerSystem_device ),
-            3 * sizeof( *mPolymerSystem ), nAllMonomers,
-            cudaMemcpyDeviceToHost
-        ) );
-    }
-    else
-    {
-        std::cerr << "[" << __FILENAME__ << "::initialize] Can't use cudaMemcpy2D"
-            << " ( sizeof polymersystem, host: " << sizeof( *mPolymerSystem )
-            << ", GPU: " << sizeof( *mPolymerSystem_device ) << ")\n";
-        CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
-        for( uint32_t i = 0; i < nAllMonomers; ++i )
-        {
-            mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
-            mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
-            mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
-        }
-    }
+    std::cerr << "[" << __FILENAME__ << "::initialize] Can't use cudaMemcpy2D"
+        << " ( sizeof polymersystem, host: " << sizeof( *mPolymerSystem )
+        << ", GPU: " << sizeof( *mPolymerSystem_device ) << ")\n";
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
 
-    std::cout << "check system before simulation: " << std::endl;
     checkSystem();
 }
 
@@ -780,7 +738,7 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
 
     this->nAllMonomers = rnAllMonomers;
     mAttributeSystem = new int32_t[ nAllMonomers ];
-    mPolymerSystem   = new int32_t[ nAllMonomers*3 ];
+    mPolymerSystem   = new intCUDA[ nAllMonomers*4+1 ];
     mNeighbors       = new MonoNNIndex[ nAllMonomers ];
     std::memset( mNeighbors, 0, sizeof( mNeighbors[0] ) * nAllMonomers );
 }
@@ -850,9 +808,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
         throw std::invalid_argument( msg.str() );
     }
 #endif
-    mPolymerSystem[ 3*i+0 ] = x;
-    mPolymerSystem[ 3*i+1 ] = y;
-    mPolymerSystem[ 3*i+2 ] = z;
+    mPolymerSystem[ 4*i+0 ] = x;
+    mPolymerSystem[ 4*i+1 ] = y;
+    mPolymerSystem[ 4*i+2 ] = z;
 
     if ( mPolymerSystem == NULL )
     {
@@ -864,9 +822,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     }
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[ 3*i+0 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( uint32_t i ){ return mPolymerSystem[ 3*i+1 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( uint32_t i ){ return mPolymerSystem[ 3*i+2 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[ 4*i+0 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( uint32_t i ){ return mPolymerSystem[ 4*i+1 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( uint32_t i ){ return mPolymerSystem[ 4*i+2 ]; }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
@@ -945,9 +903,9 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
-        mLattice[ linearizeBoxVectorIndex( mPolymerSystem[3*i+0],
-                                           mPolymerSystem[3*i+1],
-                                           mPolymerSystem[3*i+2] ) ] = 1;
+        mLattice[ linearizeBoxVectorIndex( mPolymerSystem[ 4*i+0 ],
+                                           mPolymerSystem[ 4*i+1 ],
+                                           mPolymerSystem[ 4*i+2 ] ) ] = 1;
     }
 }
 
@@ -983,9 +941,9 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( int i = 0; i < nAllMonomers; ++i )
     {
-        int32_t const & x = mPolymerSystem[ 3*i   ];
-        int32_t const & y = mPolymerSystem[ 3*i+1 ];
-        int32_t const & z = mPolymerSystem[ 3*i+2 ];
+        int32_t const & x = mPolymerSystem[ 4*i   ];
+        int32_t const & y = mPolymerSystem[ 4*i+1 ];
+        int32_t const & z = mPolymerSystem[ 4*i+2 ];
         /**
          * @verbatim
          *           ...+---+---+
@@ -1032,9 +990,9 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        int32_t const dx = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] - mPolymerSystem[ 3*i+0 ];
-        int32_t const dy = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] - mPolymerSystem[ 3*i+1 ];
-        int32_t const dz = mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] - mPolymerSystem[ 3*i+2 ];
+        int32_t const dx = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] - mPolymerSystem[ 4*i+0 ];
+        int32_t const dy = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] - mPolymerSystem[ 4*i+1 ];
+        int32_t const dz = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] - mPolymerSystem[ 4*i+2 ];
 
         int erroneousAxis = -1;
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
@@ -1049,13 +1007,13 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
             if ( mForbiddenBonds[ linearizeBondVectorIndex( dx, dy, dz ) ] )
                 msg << "This particular bond is forbidden: ";
             msg << "(" << dx << "," << dy<< "," << dz << ") between monomer "
-                << i+1 << " at (" << mPolymerSystem[3*i+0] << ","
-                                  << mPolymerSystem[3*i+1] << ","
-                                  << mPolymerSystem[3*i+2] << ") and monomer "
+                << i+1 << " at (" << mPolymerSystem[ 4*i+0 ] << ","
+                                  << mPolymerSystem[ 4*i+1 ] << ","
+                                  << mPolymerSystem[ 4*i+2 ] << ") and monomer "
                 << mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 << " at ("
-                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] << ","
-                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] << ","
-                << mPolymerSystem[ 3*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] << ")"
+                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] << ","
+                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] << ","
+                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
         }
@@ -1180,13 +1138,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host
      * would be a struct of arrays instead of an array of structs !!! */
-    CUDA_CHECK( cudaMemcpy( mPolymerSystem_host, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
-    for ( uint32_t i = 0; i < nAllMonomers; ++i )
-    {
-        mPolymerSystem[ 3*i+0 ] = (int32_t) mPolymerSystem_host[ 4*i+0 ];
-        mPolymerSystem[ 3*i+1 ] = (int32_t) mPolymerSystem_host[ 4*i+1 ];
-        mPolymerSystem[ 3*i+2 ] = (int32_t) mPolymerSystem_host[ 4*i+2 ];
-    }
+    CUDA_CHECK( cudaMemcpy( mPolymerSystem, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
 
     checkSystem();
 
@@ -1211,12 +1163,12 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         //if(MonoInfo_host[i].size != mNeighbors[i].size)
-        if (  ( ( mPolymerSystem_host[ 4*i+3 ] & 224 ) >> 5 ) != mNeighbors[i].size )
+        if (  ( ( mPolymerSystem[ 4*i+3 ] & 224 ) >> 5 ) != mNeighbors[i].size )
         {
             std::cout << "connectivity error after simulation run" << std::endl;
             std::cout << "mono:" << i << " vs " << (i) << std::endl;
             //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
-            std::cout << "numElements:" << ((mPolymerSystem_host[ 4*i+3 ]&224 )>>5) << " vs " << mNeighbors[i].size << std::endl;
+            std::cout << "numElements:" << ((mPolymerSystem[ 4*i+3 ]&224 )>>5) << " vs " << mNeighbors[i].size << std::endl;
 
             throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
         }
@@ -1240,7 +1192,6 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     cudaFree( mPolymerSystem_device       );
     cudaFree( MonoInfo_device             );
 
-    free( mPolymerSystem_host       );
     free( MonoInfo_host             );
     free( mLatticeOut_host          );
     free( mLatticeTmp_host          );

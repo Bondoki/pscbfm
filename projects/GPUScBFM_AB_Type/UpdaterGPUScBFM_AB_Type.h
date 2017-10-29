@@ -81,9 +81,8 @@ private:
      * The saved location is used as the lower left front corner when
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
-    int32_t  * mPolymerSystem;
-    intCUDA  * mPolymerSystem_device;
-    intCUDA  * mPolymerSystem_host;
+    intCUDA * mPolymerSystem;
+    intCUDA * mPolymerSystem_device;
     //MirroredTexture< intCUDA > * mPolymerSystem;
 
     int32_t *  mAttributeSystem;
