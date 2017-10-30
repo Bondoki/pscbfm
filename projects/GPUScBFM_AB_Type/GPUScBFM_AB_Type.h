@@ -18,20 +18,22 @@
 template< class T_IngredientsType >
 class GPUScBFM_AB_Type : public AbstractUpdater
 {
+public:
+    typedef T_IngredientsType IngredientsType;
+    typedef typename T_IngredientsType::molecules_type MoleculesType;
+
+protected:
+    IngredientsType & mIngredients;
+    MoleculesType   & molecules   ;
 
 private:
     UpdaterGPUScBFM_AB_Type mUpdaterGpu;
-
     int miGpuToUse;
-
     //! Number of Monte-Carlo Steps (mcs) to be executed (per GPU-call / Updater call)
     uint32_t mnSteps;
 
 protected:
-    T_IngredientsType & mIngredients;
     inline T_IngredientsType & getIngredients() { return mIngredients; }
-
-    typename T_IngredientsType::molecules_type & molecules;
 
 public:
     /**

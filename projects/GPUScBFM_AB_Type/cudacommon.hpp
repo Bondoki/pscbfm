@@ -82,7 +82,8 @@ inline std::string prettyPrintBytes
         if ( bytes == 0 )
             break;
     }
-    for ( int i = parts.size()-1; i >= 0; --i )
+    assert( parts.size() > 0 );
+    for ( int i = (int) parts.size()-1; i >= 0; --i )
     {
         if ( i != parts.size()-1 && parts.at(i) == 0 )
             continue;
