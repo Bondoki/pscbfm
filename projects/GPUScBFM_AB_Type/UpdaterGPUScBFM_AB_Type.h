@@ -96,7 +96,7 @@ public:
     };
 private:
     MonomerEdges * mNeighbors;
-    MonomerEdges * MonoInfo_host, *MonoInfo_device;
+    MirroredVector< MonomerEdges > * mMonoInfo;
 
     uint32_t   mBoxX     ;
     uint32_t   mBoxY     ;

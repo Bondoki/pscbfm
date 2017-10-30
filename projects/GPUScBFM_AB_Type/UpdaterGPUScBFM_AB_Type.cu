@@ -545,6 +545,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerSystem_device( NULL ),
    mAttributeSystem     ( NULL ),
    mNeighbors           ( NULL ),
+   mMonoInfo            ( NULL ),
    mMonomerIdsA         ( NULL ),
    mMonomerIdsB         ( NULL ),
    mBoxX                ( 0 ),
@@ -574,7 +575,7 @@ UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 {
     int nGpus;
-    getCudaDeviceProperties( NULL, &nGpus, true /* pritn GPU information */ );
+    getCudaDeviceProperties( NULL, &nGpus, true /* print GPU information */ );
     if ( iGpuToUse >= nGpus )
     {
         std::stringstream msg;
@@ -639,9 +640,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
-    int sizeMonoInfo = nAllMonomers * sizeof( MonomerEdges );
-    MonoInfo_host=(MonomerEdges*) calloc(nAllMonomers,sizeof(MonomerEdges));
-    CUDA_CHECK( cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo) );   // Allocate array of structure on device
+    if ( mMonoInfo == NULL )
+        mMonoInfo = new MirroredVector< MonomerEdges >( nAllMonomers );
+    std::memset( mMonoInfo->host, 0, mMonoInfo->nBytes );
 
     /* add property tags for each monomer with number of neighbor information */
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
@@ -656,9 +657,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
         }
         mPolymerSystem[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
         for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
-            MonoInfo_host[i].neighborIds[u] = mNeighbors[i].neighborIds[u];
+            mMonoInfo->host[i].neighborIds[u] = mNeighbors[i].neighborIds[u];
     }
-    CUDA_CHECK( cudaMemcpy( MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice ) );
+    mMonoInfo->push();
 
     checkSystem();
 
@@ -1026,7 +1027,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp->gpu,
-                        MonoInfo_device, mMonomerIdsA->texture,
+                        mMonoInfo->gpu, mMonomerIdsA->texture,
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         mLatticeOut->texture
                     );
@@ -1050,7 +1051,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesB, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp->gpu,
-                        MonoInfo_device, mMonomerIdsB->texture,
+                        mMonoInfo->gpu, mMonomerIdsB->texture,
                         nMonomersSpeciesB, randomNumbers.r250_rand32(),
                         mLatticeOut->texture
                     );
@@ -1148,12 +1149,10 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     }
 
     cudaFree( mPolymerSystem_device );
-    cudaFree( MonoInfo_device );
-    free( MonoInfo_host );
-
     if ( mPolymerSystem != NULL ){ delete[] mPolymerSystem; mPolymerSystem = NULL; }
     if ( mMonomerIdsA   != NULL ){ delete   mMonomerIdsA  ; mMonomerIdsA   = NULL; }
     if ( mMonomerIdsB   != NULL ){ delete   mMonomerIdsB  ; mMonomerIdsB   = NULL; }
     if ( mLatticeOut    != NULL ){ delete   mLatticeOut   ; mLatticeOut    = NULL; }
     if ( mLatticeTmp    != NULL ){ delete   mLatticeTmp   ; mLatticeTmp    = NULL; }
+    if ( mMonoInfo      != NULL ){ delete   mMonoInfo     ; mMonoInfo      = NULL; }
 }
