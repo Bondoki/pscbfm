@@ -51,8 +51,8 @@ public:
     )
     : mIngredients( rIngredients                   ),
       molecules   ( rIngredients.modifyMolecules() ),
-      mnSteps     ( rnSteps                        ),
-      miGpuToUse  ( riGpuToUse                     )
+      miGpuToUse  ( riGpuToUse                     ),
+      mnSteps     ( rnSteps                        )
     {}
 
     /**

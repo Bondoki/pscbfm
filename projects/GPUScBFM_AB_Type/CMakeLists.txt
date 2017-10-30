@@ -27,7 +27,7 @@ FIND_PACKAGE( CUDA REQUIRED )
 set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --compiler-bindir /usr/bin/g++-4.9 -std=c++11 )
 set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -lineinfo -gencode arch=compute_30,code=sm_30 )
 if ( CMDAKE_BUILD_TYPE STREQUAL "Debug" )
-    set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g )
+    set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g -Wall -X Wall,Wextra )
 endif()
 
 

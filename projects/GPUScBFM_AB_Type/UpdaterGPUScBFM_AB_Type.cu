@@ -685,7 +685,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemset( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes ) );
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
-    for ( int t = 0; t < nAllMonomers; ++t )
+    for ( uint32_t t = 0; t < nAllMonomers; ++t )
     {
         #ifdef USEZCURVE
             uint32_t xk = mPolymerSystem[ 4*t+0 ] & mBoxXM1;
@@ -872,7 +872,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
      * but much less readable */
     mBoxXLog2  = 0; uint32_t dummy = mBoxX; while ( dummy >>= 1 ) ++mBoxXLog2;
     mBoxXYLog2 = 0; dummy = mBoxX*mBoxY;    while ( dummy >>= 1 ) ++mBoxXYLog2;
-    if ( mBoxX != ( 1 << mBoxXLog2 ) || mBoxX * boxY != ( 1 << mBoxXYLog2 ) )
+    if ( mBoxX != ( 1u << mBoxXLog2 ) || mBoxX * boxY != ( 1u << mBoxXYLog2 ) )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setLatticeSize" << "] "
@@ -931,7 +931,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     /*
      Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-    for ( int i = 0; i < nAllMonomers; ++i )
+    for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         int32_t const & x = mPolymerSystem[ 4*i   ];
         int32_t const & y = mPolymerSystem[ 4*i+1 ];
@@ -1144,7 +1144,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     /* check whether connectivities on GPU got corrupted */
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        int const nNeighbors = ( mPolymerSystem[ 4*i+3 ] & 224 /* 0b11100000 */ ) >> 5;
+        unsigned const nNeighbors = ( mPolymerSystem[ 4*i+3 ] & 224 /* 0b11100000 */ ) >> 5;
         if ( nNeighbors != mNeighbors->host[i].size )
         {
             std::stringstream msg;

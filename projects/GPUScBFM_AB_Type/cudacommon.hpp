@@ -85,7 +85,7 @@ inline std::string prettyPrintBytes
     assert( parts.size() > 0 );
     for ( int i = (int) parts.size()-1; i >= 0; --i )
     {
-        if ( i != parts.size()-1 && parts.at(i) == 0 )
+        if ( i != (int) parts.size()-1 && parts.at(i) == 0 )
             continue;
         out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" )
             << "B" << ( i > 0 ? " " : "" );
@@ -676,19 +676,6 @@ template< class T > __device__ inline void swap( T & a, T & b )
     T const c = a;
     a = b;
     b = c;
-}
-
-
-__host__ __device__ inline
-int snprintFloat
-(
-    char        * const msg  ,
-    unsigned int  const nChars,
-    float         const f
-)
-{
-    assert( false && "unfinished skeleton" );
-    return 0;
 }
 
 template< typename T >
