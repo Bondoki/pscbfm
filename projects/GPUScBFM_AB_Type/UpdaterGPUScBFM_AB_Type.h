@@ -34,12 +34,6 @@
 
 // #define NONPERIODICITY
 
-struct MonoInfo
-{
-    uint32_t size;
-    uint32_t bondsMonomerIdx[ MAX_CONNECTIVITY ];
-};
-
 
 
 class UpdaterGPUScBFM_AB_Type
@@ -93,14 +87,16 @@ private:
 
     int32_t *  mAttributeSystem;
 
-    //! Holds connectivity information
-    struct MonoNNIndex
+    /* stores amount and IDs of neighbors for each monomer */
+public:
+    struct MonomerEdges
     {
         uint32_t size;
-        uint32_t bondsMonomerIdx[ MAX_CONNECTIVITY ];
+        uint32_t neighborIds[ MAX_CONNECTIVITY ];
     };
-
-    MonoNNIndex * mNeighbors;
+private:
+    MonomerEdges * mNeighbors;
+    MonomerEdges * MonoInfo_host, *MonoInfo_device;
 
     uint32_t   mBoxX     ;
     uint32_t   mBoxY     ;
@@ -110,9 +106,6 @@ private:
     uint32_t   mBoxZM1   ;
     uint32_t   mBoxXLog2 ;
     uint32_t   mBoxXYLog2;
-
-    /* stores connectivity information for the monomers */
-    MonoInfo * MonoInfo_host, *MonoInfo_device;
 
     /**
      * These are arrays containing the monomer indices for the respective
@@ -136,7 +129,7 @@ private:
     void checkSystem();
 
 public:
-    UpdaterGPUScBFM_AB_Type(){}
+    UpdaterGPUScBFM_AB_Type();
     virtual ~UpdaterGPUScBFM_AB_Type();
 
     void initialize( int iGpuToUse );

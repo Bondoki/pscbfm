@@ -364,11 +364,12 @@ __device__ __host__ uintCUDA linearizeBondVectorIndex
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
+using MonomerEdges = UpdaterGPUScBFM_AB_Type::MonomerEdges;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     intCUDA           * const dpPolymerSystem  ,
     uint8_t           * const dpLatticeTmp     ,
-    MonoInfo          * const dpMonoInfo       ,
+    MonomerEdges      * const dpMonoInfo       ,
     cudaTextureObject_t const texSpeciesIndices,
     uint32_t            const nMonomers        ,
     uint32_t            const rSeed            ,
@@ -410,9 +411,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     unsigned const nNeighbors = ( properties & 224 ) >> 5; // 224 = 0b1110 0000
     for ( unsigned iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
     {
-        intCUDA const nN_X = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+0 );
-        intCUDA const nN_Y = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+1 );
-        intCUDA const nN_Z = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].bondsMonomerIdx[ iNeighbor ]+2 );
+        intCUDA const nN_X = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].neighborIds[ iNeighbor ]+0 );
+        intCUDA const nN_Y = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].neighborIds[ iNeighbor ]+1 );
+        intCUDA const nN_Z = tex1Dfetch( mPolymerSystem_texture, 4*dpMonoInfo[ iMonomer ].neighborIds[ iNeighbor ]+2 );
         if ( dpForbiddenBonds[ linearizeBondVectorIndex( nN_X - x0 - dx, nN_Y - y0 - dy, nN_Z - z0 - dz ) ] )
             return;
     }
@@ -532,6 +533,32 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     dpPolymerSystem[ 4*iMonomer+3 ] = properties & MASK5BITS; // delete the first 5 bits
 }
 
+UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
+ : nAllMonomers         ( 0 ),
+   nStars               ( 0 ),
+   nMonomersPerStarArm  ( 0 ),
+   nCrosslinker         ( 0 ),
+   mLattice             ( NULL ),
+   mLatticeOut          ( NULL ),
+   mLatticeTmp          ( NULL ),
+   mPolymerSystem       ( NULL ),
+   mPolymerSystem_device( NULL ),
+   mAttributeSystem     ( NULL ),
+   mNeighbors           ( NULL ),
+   mMonomerIdsA         ( NULL ),
+   mMonomerIdsB         ( NULL ),
+   mBoxX                ( 0 ),
+   mBoxY                ( 0 ),
+   mBoxZ                ( 0 ),
+   mBoxXM1              ( 0 ),
+   mBoxYM1              ( 0 ),
+   mBoxZM1              ( 0 ),
+   mBoxXLog2            ( 0 ),
+   mBoxXYLog2           ( 0 ),
+   nMonomersSpeciesA    ( 0 ),
+   nMonomersSpeciesB    ( 0 )
+{}
+
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 {
     if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }
@@ -612,8 +639,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
-    int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
-    MonoInfo_host=(MonoInfo*) calloc(nAllMonomers,sizeof(MonoInfo));
+    int sizeMonoInfo = nAllMonomers * sizeof( MonomerEdges );
+    MonoInfo_host=(MonomerEdges*) calloc(nAllMonomers,sizeof(MonomerEdges));
     CUDA_CHECK( cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo) );   // Allocate array of structure on device
 
     /* add property tags for each monomer with number of neighbor information */
@@ -629,7 +656,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
         }
         mPolymerSystem[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
         for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
-            MonoInfo_host[i].bondsMonomerIdx[u] = mNeighbors[i].bondsMonomerIdx[u];
+            MonoInfo_host[i].neighborIds[u] = mNeighbors[i].neighborIds[u];
     }
     CUDA_CHECK( cudaMemcpy( MonoInfo_device, MonoInfo_host, sizeMonoInfo, cudaMemcpyHostToDevice ) );
 
@@ -692,9 +719,9 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
     }
 
     this->nAllMonomers = rnAllMonomers;
-    mAttributeSystem = new int32_t[ nAllMonomers ];
-    mPolymerSystem   = new intCUDA[ nAllMonomers*4+1 ];
-    mNeighbors       = new MonoNNIndex[ nAllMonomers ];
+    mAttributeSystem = new int32_t     [ nAllMonomers     ];
+    mPolymerSystem   = new intCUDA     [ nAllMonomers*4+1 ];
+    mNeighbors       = new MonomerEdges[ nAllMonomers     ];
     std::memset( mNeighbors, 0, sizeof( mNeighbors[0] ) * nAllMonomers );
 }
 
@@ -787,17 +814,18 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
     uint32_t const iMonomer2
 )
 {
-    /* the commented parts are correct, but basically redundant, because
-     * the bonds are a non-directional graph */
-    mNeighbors[ iMonomer1 ].bondsMonomerIdx[ mNeighbors[ iMonomer1 ].size ] = iMonomer2;
-    //mNeighbors[ iMonomer2 ].bondsMonomerIdx[ mNeighbors[ iMonomer2 ].size ] = iMonomer1;
-
-    ++mNeighbors[ iMonomer1 ].size;
-    //mNeighbors[ iMonomer2 ].size++;
-
-    //if((mNeighbors[ iMonomer1 ].size > MAX_CONNECTIVITY) || (mNeighbors[ iMonomer2 ].size > MAX_CONNECTIVITY))
-    if ( mNeighbors[ iMonomer1 ].size > MAX_CONNECTIVITY )
-        throw std::runtime_error("MAX_CONNECTIVITY  exceeded! Exiting...\n");
+    /* @todo add check whether the bond already exists */
+    /* Could also add the inversio, but the bonds are a non-directional graph */
+    auto const iNew = mNeighbors[ iMonomer1 ].size++;
+    if ( iNew > MAX_CONNECTIVITY-1 )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::setConnectivity" << "] "
+            << "The maximum amount of bonds per monomer (" << MAX_CONNECTIVITY
+            << ") has been exceeded!\n";
+        throw std::invalid_argument( msg.str() );
+    }
+    mNeighbors[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
 }
 
 void UpdaterGPUScBFM_AB_Type::setLatticeSize
@@ -945,9 +973,10 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        int32_t const dx = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] - mPolymerSystem[ 4*i+0 ];
-        int32_t const dy = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] - mPolymerSystem[ 4*i+1 ];
-        int32_t const dz = mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] - mPolymerSystem[ 4*i+2 ];
+        intCUDA * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
+        int32_t const dx = neighbor[0] - mPolymerSystem[ 4*i+0 ];
+        int32_t const dy = neighbor[1] - mPolymerSystem[ 4*i+1 ];
+        int32_t const dz = neighbor[2] - mPolymerSystem[ 4*i+2 ];
 
         int erroneousAxis = -1;
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
@@ -965,10 +994,8 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
                 << i+1 << " at (" << mPolymerSystem[ 4*i+0 ] << ","
                                   << mPolymerSystem[ 4*i+1 ] << ","
                                   << mPolymerSystem[ 4*i+2 ] << ") and monomer "
-                << mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 << " at ("
-                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+0 ] << ","
-                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+1 ] << ","
-                << mPolymerSystem[ 4*mNeighbors[i].bondsMonomerIdx[ iNeighbor ]+2 ] << ")"
+                << mNeighbors[i].neighborIds[ iNeighbor ]+1 << " at ("
+                << neighbor[0] << "," << neighbor[1] << "," << neighbor[2] << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
         }
@@ -1059,11 +1086,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         msg << "latticeTmp occupation (" << nOccupied << ") should be 0! Exiting ...\n";
         throw std::runtime_error( msg.str() );
     }
-
-    /* why isn't this copied directly into mLattice ??? */
-    mLatticeOut->pop();
-    for ( int i = 0; i < mBoxX * mBoxY * mBoxZ; ++i )
-        mLattice[i] = mLatticeOut->host[i];
 
     //start -z-order
     /*
