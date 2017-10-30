@@ -95,7 +95,7 @@ public:
         uint32_t neighborIds[ MAX_CONNECTIVITY ];
     };
 private:
-    MonomerEdges * mNeighbors;
+    MirroredVector< MonomerEdges > * mNeighbors;
     MirroredVector< MonomerEdges > * mMonoInfo;
 
     uint32_t   mBoxX     ;

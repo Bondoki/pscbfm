@@ -565,7 +565,7 @@ UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
     if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }
     if ( mPolymerSystem   != NULL ){ delete[] mPolymerSystem  ; mPolymerSystem   = NULL; }
     if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }
-    if ( mNeighbors       != NULL ){ delete[] mNeighbors      ; mNeighbors       = NULL; }
+    if ( mNeighbors       != NULL ){ delete   mNeighbors      ; mNeighbors       = NULL; }
     if ( mMonomerIdsA     != NULL ){ delete   mMonomerIdsA    ; mMonomerIdsA     = NULL; }
     if ( mMonomerIdsB     != NULL ){ delete   mMonomerIdsB    ; mMonomerIdsB     = NULL; }
     if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }
@@ -642,24 +642,32 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     // the index on GPU starts at 0 and is one less than loaded
     if ( mMonoInfo == NULL )
         mMonoInfo = new MirroredVector< MonomerEdges >( nAllMonomers );
-    std::memset( mMonoInfo->host, 0, mMonoInfo->nBytes );
 
     /* add property tags for each monomer with number of neighbor information */
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        if ( mNeighbors[i].size > 7)
+        if ( mNeighbors->host[i].size > 7)
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::initialize] "
                 << "This implementation allows max. 7 neighbors per monomer, "
-                << "but monomer " << i << " has " << mNeighbors[i].size << "\n";
+                << "but monomer " << i << " has " << mNeighbors->host[i].size << "\n";
             throw std::invalid_argument( msg.str() );
         }
-        mPolymerSystem[ 4*i+3 ] |= ( (intCUDA) mNeighbors[i].size ) << 5;
-        for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
-            mMonoInfo->host[i].neighborIds[u] = mNeighbors[i].neighborIds[u];
+        mPolymerSystem[ 4*i+3 ] |= ( (intCUDA) mNeighbors->host[i].size ) << 5;
     }
+    if ( mNeighbors == NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::initialize] "
+            << "mNeighbors is still NULL! setNrOfAllMonomers needs to be called first!\n";
+        throw std::invalid_argument( msg.str() );
+    }
+    std::memcpy( mMonoInfo->host, mNeighbors->host, mMonoInfo->nBytes );
     mMonoInfo->push();
+    mNeighbors->push();
+    std::cerr << "mMonoInfo = " << *mMonoInfo << "\n";
+    std::cerr << "mNeighbors = " << *mNeighbors << "\n";
 
     checkSystem();
 
@@ -720,10 +728,10 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
     }
 
     this->nAllMonomers = rnAllMonomers;
-    mAttributeSystem = new int32_t     [ nAllMonomers     ];
-    mPolymerSystem   = new intCUDA     [ nAllMonomers*4+1 ];
-    mNeighbors       = new MonomerEdges[ nAllMonomers     ];
-    std::memset( mNeighbors, 0, sizeof( mNeighbors[0] ) * nAllMonomers );
+    mAttributeSystem = new int32_t[ nAllMonomers   ];
+    mPolymerSystem   = new intCUDA[ nAllMonomers*4 ];
+    mNeighbors       = new MirroredVector< MonomerEdges >( nAllMonomers );
+    std::memset( mNeighbors->host, 0, mNeighbors->nBytes );
 }
 
 void UpdaterGPUScBFM_AB_Type::setPeriodicity
@@ -817,7 +825,7 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
 {
     /* @todo add check whether the bond already exists */
     /* Could also add the inversio, but the bonds are a non-directional graph */
-    auto const iNew = mNeighbors[ iMonomer1 ].size++;
+    auto const iNew = mNeighbors->host[ iMonomer1 ].size++;
     if ( iNew > MAX_CONNECTIVITY-1 )
     {
         std::stringstream msg;
@@ -826,7 +834,7 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
             << ") has been exceeded!\n";
         throw std::invalid_argument( msg.str() );
     }
-    mNeighbors[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
+    mNeighbors->host[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
 }
 
 void UpdaterGPUScBFM_AB_Type::setLatticeSize
@@ -970,11 +978,11 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      * bond set
      */
     for ( unsigned i = 0; i < nAllMonomers; ++i )
-    for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors[i].size; ++iNeighbor )
+    for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors->host[i].size; ++iNeighbor )
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        intCUDA * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
+        intCUDA * const neighbor = & mPolymerSystem[ 4*mNeighbors->host[i].neighborIds[ iNeighbor ] ];
         int32_t const dx = neighbor[0] - mPolymerSystem[ 4*i+0 ];
         int32_t const dy = neighbor[1] - mPolymerSystem[ 4*i+1 ];
         int32_t const dz = neighbor[2] - mPolymerSystem[ 4*i+2 ];
@@ -995,7 +1003,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
                 << i+1 << " at (" << mPolymerSystem[ 4*i+0 ] << ","
                                   << mPolymerSystem[ 4*i+1 ] << ","
                                   << mPolymerSystem[ 4*i+2 ] << ") and monomer "
-                << mNeighbors[i].neighborIds[ iNeighbor ]+1 << " at ("
+                << mNeighbors->host[i].neighborIds[ iNeighbor ]+1 << " at ("
                 << neighbor[0] << "," << neighbor[1] << "," << neighbor[2] << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
@@ -1024,6 +1032,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             switch ( randomNumbers.r250_rand32() % 2 )
             {
                 case 0:
+                    /* WHY CAN'T I REPLACE mMonoInfo->gpu with mNeighbors->gpu ??? */
                     kernelSimulationScBFMCheckSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeTmp->gpu,
@@ -1136,14 +1145,14 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
         int const nNeighbors = ( mPolymerSystem[ 4*i+3 ] & 224 /* 0b11100000 */ ) >> 5;
-        if ( nNeighbors != mNeighbors[i].size )
+        if ( nNeighbors != mNeighbors->host[i].size )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::~cleanup" << "] "
                 << "Connectivities in property field of mPolymerSystem are "
                 << "different from host-side connectivities. This should not "
                 << "happen! (Monomer " << i << ": " << nNeighbors << " != "
-                << mNeighbors[i].size << "\n";
+                << mNeighbors->host[i].size << "\n";
             throw std::runtime_error( msg.str() );
         }
     }

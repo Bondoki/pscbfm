@@ -54,6 +54,45 @@ inline T ceilDiv( T a, S b )
     return (a+b-1)/b;
 }
 
+#include <sstream>
+#include <string>
+#include <vector>
+
+/**
+ * Given the number of bytes, this function prints out an exact human
+ * readable format, e.g. 128427:
+ *   logical: 125 MiB 427 B
+ *   SI     : 128 MB 427 B
+ * Wasn't intented, but in both representations the amount of bytes are
+ * identical for this number. (This works if xMiB * 1024 ends on 000)
+ */
+inline std::string prettyPrintBytes
+(
+    size_t       bytes,
+    bool   const logical = true
+)
+{
+    char const suffixes[] = { ' ', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y' };
+    std::stringstream out;
+    std::vector< size_t > parts;
+    for ( unsigned i = 0u; i < sizeof( suffixes ); ++i )
+    {
+        parts.push_back( bytes % size_t( 1024 ) );
+        bytes /= size_t( 1024 );
+        if ( bytes == 0 )
+            break;
+    }
+    for ( int i = parts.size()-1; i >= 0; --i )
+    {
+        if ( i != parts.size()-1 && parts.at(i) == 0 )
+            continue;
+        out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" )
+            << "B" << ( i > 0 ? " " : "" );
+    }
+    std::string result = out.str();
+    result.erase( result.size()-1, 1 );
+    return result;
+}
 
 #if defined( __CUDACC__ )
 
@@ -388,6 +427,7 @@ inline void getCudaDeviceProperties
         printf( "| Kernel Timeout Enabled   : %s\n"        , prop->kernelExecTimeoutEnabled ? "true" : "false" );
         printf( "| Uses TESLA Driver        : %s\n"        , prop->tccDriver         ? "true" : "false" );
         printf( "=====================================================\n" );
+        fflush(stdout);
     }
 
     if ( rpDeviceProperties == &fallbackPropArray )
@@ -435,6 +475,7 @@ class MirroredTexture;
 template< class T >
 class MirroredVector
 {
+    #define DEBUG_MIRRORED_VECTOR 0
 public:
     T *                host     ;
     T *                gpu      ;
@@ -449,9 +490,21 @@ public:
     inline void malloc()
     {
         if ( host == NULL )
+        {
+            #if DEBUG_MIRRORED_VECTOR > 10
+                std::cerr << "[" << __FILENAME__ << "::MirroredVector::malloc]"
+                    << "Allocate " << prettyPrintBytes( nBytes ) << " on host.\n";
+            #endif
             host = (T*) ::malloc( nBytes );
+        }
         if ( gpu == NULL )
+        {
+            #if DEBUG_MIRRORED_VECTOR > 10
+                std::cerr << "[" << __FILENAME__ << "::MirroredVector::malloc]"
+                    << "Allocate " << prettyPrintBytes( nBytes ) << " on GPU.\n";
+            #endif
             CUDA_ERROR( cudaMalloc( (void**) &gpu, nBytes ) );
+        }
         if ( ! ( host != NULL && gpu != NULL ) )
         {
             std::stringstream msg;
@@ -529,8 +582,20 @@ public:
     {
         this->free();
     }
+
+    #undef DEBUG_MIRRORED_VECTOR
 };
 
+template< typename T >
+std::ostream & operator<<( std::ostream & out, MirroredVector<T> const & x )
+{
+    out << "( nElements = " << x.nElements << ", "
+        << "nBytes = " << x.nBytes << ","
+        << "sizeof(T) = " << sizeof(T) << ","
+        << "host = " << x.host << ","
+        << "gpu = " << x.gpu << " )";
+    return out;
+}
 
 template< class T >
 class MirroredTexture : public MirroredVector<T>
@@ -701,36 +766,6 @@ int snprintFloatArray
     assert( nCharsWritten < nChars );
     msg[ nCharsWritten ] = '\0';
     return nCharsWritten;
-}
-
-#include <sstream>
-#include <string>
-#include <vector>
-
-std::string prettyPrintBytes
-(
-    size_t       bytes,
-    bool   const logical = true
-)
-{
-    char const suffixes[] = { ' ', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y' };
-    std::stringstream out;
-    std::vector< size_t > parts;
-    for ( unsigned i = 0u; i < sizeof( suffixes ); ++i )
-    {
-        parts.push_back( bytes % size_t( 1024 ) );
-        bytes /= size_t( 1024 );
-        if ( bytes == 0 )
-            break;
-    }
-    for ( int i = sizeof( suffixes )-1; i >= 0; --i )
-    {
-        if ( i != sizeof( suffixes )-1 && parts.at(i) == 0 )
-            continue;
-        out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" )
-            << "B" << ( i > 0 ? " " : "" );
-    }
-    return out.str();
 }
 
 #if __cplusplus >= 201103
