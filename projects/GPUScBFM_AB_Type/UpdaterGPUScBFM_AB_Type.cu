@@ -538,10 +538,10 @@ UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
     if ( mPolymerSystem   != NULL ){ delete[] mPolymerSystem  ; mPolymerSystem   = NULL; }
     if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }
     if ( mNeighbors       != NULL ){ delete[] mNeighbors      ; mNeighbors       = NULL; }
-    if ( mMonomerIdsA     != NULL ){ delete[] mMonomerIdsA    ; mMonomerIdsA     = NULL; }
-    if ( mMonomerIdsB     != NULL ){ delete[] mMonomerIdsB    ; mMonomerIdsB     = NULL; }
-    if ( mLatticeOut      != NULL ){ delete[] mLatticeOut     ; mLatticeOut      = NULL; }
-    if ( mLatticeTmp      != NULL ){ delete[] mLatticeTmp     ; mLatticeTmp      = NULL; }
+    if ( mMonomerIdsA     != NULL ){ delete   mMonomerIdsA    ; mMonomerIdsA     = NULL; }
+    if ( mMonomerIdsB     != NULL ){ delete   mMonomerIdsB    ; mMonomerIdsB     = NULL; }
+    if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }
+    if ( mLatticeTmp      != NULL ){ delete   mLatticeTmp     ; mLatticeTmp      = NULL; }
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
@@ -582,32 +582,17 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( intCUDA ) * 6 ) );
     CUDA_CHECK( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( intCUDA ) * 6 ) );
 
-    /***************************creating look-up for species*****************************************/
-
-    /* count monomers per species before allocating per species arrays */
-    uint32_t * pMonomerSpecies = (uint32_t *) malloc( nAllMonomers * sizeof(uint32_t) );
+    /* count monomers per species before allocating per species arrays and
+     * sorting the monomers into them */
     nMonomersSpeciesA = 0;
     nMonomersSpeciesB = 0;
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        // monomer is odd or even / A or B
-        if ( mAttributeSystem[i] == 1 )
-        {
-            nMonomersSpeciesA++;
-            pMonomerSpecies[i] = 1;
-        }
-        else if ( mAttributeSystem[i] == 2 )
-        {
-            nMonomersSpeciesB++;
-            pMonomerSpecies[i] = 2;
-        }
-        else
-            throw std::runtime_error( "wrong attributes!!! Exiting... \n" );
+        nMonomersSpeciesA += mAttributeSystem[i] == 1;
+        nMonomersSpeciesB += mAttributeSystem[i] == 2;
+        if ( mAttributeSystem[i] != 1 && mAttributeSystem[i] != 2 )
+            throw std::runtime_error( "Wrong attribute! Only 1 or 2 allowed." );
     }
-    std::cout << "nMonomersSpezies_A: " << nMonomersSpeciesA << std::endl;
-    std::cout << "nMonomersSpezies_B: " << nMonomersSpeciesB << std::endl;
-    if ( nMonomersSpeciesA + nMonomersSpeciesB != nAllMonomers )
-        throw std::runtime_error( "Nr Of MonomerSpezies does not add up! Exiting... \n");
 
     mMonomerIdsA = new MirroredTexture< uint32_t >( nMonomersSpeciesA );
     mMonomerIdsB = new MirroredTexture< uint32_t >( nMonomersSpeciesB );
@@ -617,32 +602,17 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     uint32_t nMonomersWrittenB = 0;
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        if ( pMonomerSpecies[i] == 1 )
+        if ( mAttributeSystem[i] == 1 )
             mMonomerIdsA->host[ nMonomersWrittenA++ ] = i;
-        else if ( pMonomerSpecies[i] == 2 )
+        else if ( mAttributeSystem[i] == 2 )
             mMonomerIdsB->host[ nMonomersWrittenB++ ] = i;
     }
-    if ( nMonomersSpeciesA != nMonomersWrittenA )
-        throw std::runtime_error( "Number of monomers copied for species A does not add up!" );
-    if ( nMonomersSpeciesB != nMonomersWrittenB )
-        throw std::runtime_error( "Number of monomers copied for species B does not add up!" );
-     mMonomerIdsA->push();
-     mMonomerIdsB->push();
-
-    CUDA_CHECK( cudaMalloc( (void **) &mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) ) );
+    mMonomerIdsA->push();
+    mMonomerIdsB->push();
 
     // prepare and copy the connectivity matrix to GPU
     // the index on GPU starts at 0 and is one less than loaded
     int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
-    std::cout
-        << "size of struct MonoInfo: " << sizeof(MonoInfo)
-        << " bytes = " << (sizeof(MonoInfo)/(1024.0))
-        <<  "kB for one monomer connectivity " << std::endl;
-    std::cout << "try to allocate : " << (sizeMonoInfo) << " bytes = "
-        << (sizeMonoInfo/(1024.0)) <<  "kB = " << (sizeMonoInfo/(1024.0*1024.0))
-        <<  "MB for connectivity matrix on GPU " << std::endl;
-
-
     MonoInfo_host=(MonoInfo*) calloc(nAllMonomers,sizeof(MonoInfo));
     CUDA_CHECK( cudaMalloc((void **) &MonoInfo_device, sizeMonoInfo) );   // Allocate array of structure on device
 
@@ -694,13 +664,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
         #endif
     }
     mLatticeOut->push();
+    CUDA_CHECK( cudaMalloc( (void **) &mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) ) );
     CUDA_CHECK( cudaMemcpy( mPolymerSystem_device, mPolymerSystem, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyHostToDevice ) );
-
     cudaBindTexture( 0, mPolymerSystem_texture, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ) );
-
-    CUDA_CHECK( cudaMemcpy( mPolymerSystem, mPolymerSystem_device, ( 4*nAllMonomers+1 ) * sizeof( intCUDA ), cudaMemcpyDeviceToHost ) );
-
-    checkSystem();
 }
 
 
@@ -1138,51 +1104,34 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     << nMonteCarloSteps * ( nAllMonomers / dt )  << "     runtime[s]:" << dt << std::endl;
 }
 
+/**
+ * This only should undo the task done by initialize, nothing more ???
+ */
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
-    /* copy information / results from GPU to Host. Actually not really
-     * needed, because this is done after each kernel run i.e. the only thing
-     * which should be able to touch the GPU data. (already deleted mPolymerSystem!) */
-    CUDA_CHECK( cudaMemcpy( mLattice, mLatticeOut->gpu, mLatticeOut->nBytes, cudaMemcpyDeviceToHost ) );
-
     /* check whether connectivities on GPU got corrupted */
-    int sizeMonoInfo = nAllMonomers * sizeof( MonoInfo );
-    CUDA_CHECK( cudaMemcpy( MonoInfo_host, MonoInfo_device, sizeMonoInfo, cudaMemcpyDeviceToHost ) );
     for ( uint32_t i = 0; i < nAllMonomers; ++i )
     {
-        //if(MonoInfo_host[i].size != mNeighbors[i].size)
-        if (  ( ( mPolymerSystem[ 4*i+3 ] & 224 ) >> 5 ) != mNeighbors[i].size )
+        int const nNeighbors = ( mPolymerSystem[ 4*i+3 ] & 224 /* 0b11100000 */ ) >> 5;
+        if ( nNeighbors != mNeighbors[i].size )
         {
-            std::cout << "connectivity error after simulation run" << std::endl;
-            std::cout << "mono:" << i << " vs " << (i) << std::endl;
-            //cout << "numElements:" << MonoInfo_host[i].size << " vs " << mNeighbors[i].size << endl;
-            std::cout << "numElements:" << ((mPolymerSystem[ 4*i+3 ]&224 )>>5) << " vs " << mNeighbors[i].size << std::endl;
-
-            throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
-        }
-        for ( unsigned u = 0; u < MAX_CONNECTIVITY; ++u )
-        {
-            if ( MonoInfo_host[i].bondsMonomerIdx[u] != mNeighbors[i].bondsMonomerIdx[u] )
-            {
-                std::cout << "connectivity error after simulation run" << std::endl;
-                std::cout << "mono:" << i << " vs " << (i) << std::endl;
-
-                std::cout << "bond["<< u << "]: " << MonoInfo_host[i].bondsMonomerIdx[u] << " vs " << mNeighbors[i].bondsMonomerIdx[u] << std::endl;
-
-                throw std::runtime_error("Connectivity is corrupted! Maybe your Simulation is wrong! Exiting...\n");
-            }
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::~cleanup" << "] "
+                << "Connectivities in property field of mPolymerSystem are "
+                << "different from host-side connectivities. This should not "
+                << "happen! (Monomer " << i << ": " << nNeighbors << " != "
+                << mNeighbors[i].size << "\n";
+            throw std::runtime_error( msg.str() );
         }
     }
-    std::cout << "no errors in connectivity matrix after simulation run" << std::endl;
 
-    cudaFree( mPolymerSystem_device       );
-    cudaFree( MonoInfo_device             );
-
-    free( MonoInfo_host             );
+    cudaFree( mPolymerSystem_device );
+    cudaFree( MonoInfo_device );
+    free( MonoInfo_host );
 
     if ( mPolymerSystem != NULL ){ delete[] mPolymerSystem; mPolymerSystem = NULL; }
-    if ( mMonomerIdsA   != NULL ){ delete[] mMonomerIdsA  ; mMonomerIdsA   = NULL; }
-    if ( mMonomerIdsB   != NULL ){ delete[] mMonomerIdsB  ; mMonomerIdsB   = NULL; }
-    if ( mLatticeOut    != NULL ){ delete[] mLatticeOut   ; mLatticeOut    = NULL; }
-    if ( mLatticeTmp    != NULL ){ delete[] mLatticeTmp   ; mLatticeTmp    = NULL; }
+    if ( mMonomerIdsA   != NULL ){ delete   mMonomerIdsA  ; mMonomerIdsA   = NULL; }
+    if ( mMonomerIdsB   != NULL ){ delete   mMonomerIdsB  ; mMonomerIdsB   = NULL; }
+    if ( mLatticeOut    != NULL ){ delete   mLatticeOut   ; mLatticeOut    = NULL; }
+    if ( mLatticeTmp    != NULL ){ delete   mLatticeTmp   ; mLatticeTmp    = NULL; }
 }
