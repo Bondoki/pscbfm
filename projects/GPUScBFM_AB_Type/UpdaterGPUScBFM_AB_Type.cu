@@ -1046,59 +1046,43 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         for ( uint32_t iSubStep = 0; iSubStep < 2; ++iSubStep )
         {
             /* randomly choose whether to advance monomers groupt to A or B */
-            switch ( randomNumbers.r250_rand32() % 2 )
+            int nBlocks = 0;
+            uint32_t nMonomersSpecies = 0;
+            MirroredTexture< uint32_t > * monomerIds = NULL;
+            if ( randomNumbers.r250_rand32() % 2 == 0 )
             {
-                case 0:
-                    /* WHY CAN'T I REPLACE mMonoInfo->gpu with mNeighbors->gpu ??? */
-                    kernelSimulationScBFMCheckSpecies
-                    <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp->gpu,
-                        mMonoInfo->gpu, mMonomerIdsA->texture,
-                        nMonomersSpeciesA, randomNumbers.r250_rand32(),
-                        mLatticeOut->texture
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );  // for debug purposes. Might hinder performance
-                    kernelSimulationScBFMPerformSpecies
-                    <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeOut->gpu,
-                        mMonomerIdsA->texture, nMonomersSpeciesA,
-                        mLatticeTmp->texture
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
-                    kernelSimulationScBFMZeroArraySpecies
-                    <<< nBlocksSpeciesA, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp->gpu,
-                        mMonomerIdsA->texture, nMonomersSpeciesA
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
-                    break;
-
-                case 1:
-                    kernelSimulationScBFMCheckSpecies
-                    <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp->gpu,
-                        mMonoInfo->gpu, mMonomerIdsB->texture,
-                        nMonomersSpeciesB, randomNumbers.r250_rand32(),
-                        mLatticeOut->texture
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
-                    kernelSimulationScBFMPerformSpecies
-                    <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeOut->gpu,
-                        mMonomerIdsB->texture, nMonomersSpeciesB,
-                        mLatticeTmp->texture
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
-                    kernelSimulationScBFMZeroArraySpecies
-                    <<< nBlocksSpeciesB, nThreads >>>(
-                        mPolymerSystem_device, mLatticeTmp->gpu,
-                        mMonomerIdsB->texture, nMonomersSpeciesB
-                    );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
-                    break;
-
-                default: break;
+                nBlocks          = nBlocksSpeciesA  ;
+                monomerIds       = mMonomerIdsA     ;
+                nMonomersSpecies = nMonomersSpeciesA;
             }
+            else
+            {
+                nBlocks          = nBlocksSpeciesB  ;
+                monomerIds       = mMonomerIdsB     ;
+                nMonomersSpecies = nMonomersSpeciesB;
+            }
+            /* WHY CAN'T I REPLACE mMonoInfo->gpu with mNeighbors->gpu ??? */
+            kernelSimulationScBFMCheckSpecies
+            <<< nBlocks, nThreads >>>(
+                mPolymerSystem_device, mLatticeTmp->gpu,
+                mMonoInfo->gpu, monomerIds->texture,
+                nMonomersSpecies, randomNumbers.r250_rand32(),
+                mLatticeOut->texture
+            );
+            CUDA_CHECK( cudaDeviceSynchronize() );  // for debug purposes. Might hinder performance
+            kernelSimulationScBFMPerformSpecies
+            <<< nBlocks, nThreads >>>(
+                mPolymerSystem_device, mLatticeOut->gpu,
+                monomerIds->texture, nMonomersSpecies,
+                mLatticeTmp->texture
+            );
+            CUDA_CHECK( cudaDeviceSynchronize() );
+            kernelSimulationScBFMZeroArraySpecies
+            <<< nBlocks, nThreads >>>(
+                mPolymerSystem_device, mLatticeTmp->gpu,
+                monomerIds->texture, nMonomersSpecies
+            );
+            CUDA_CHECK( cudaDeviceSynchronize() );
         }
     }
 
