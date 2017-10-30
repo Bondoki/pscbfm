@@ -1,113 +1,168 @@
-#ifndef GPUScBFM_AB_Type_H_
-#define GPUScBFM_AB_Type_H_
+#pragma once
 
+
+#include <ctime>                        // clock
+#include <iostream>
 
 #include "./UpdaterGPUScBFM_AB_Type.h"
 
+#define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 
-template<class IngredientsType>
-class GPUScBFM_AB_Type : public AbstractUpdater {
 
-private:
-	UpdaterGPUScBFM_AB_Type Updater_GPUScBFM_AB_Type;
+/**
+ * Why is this abstraction layer being used, instead of just incorporating
+ * the GPU updated into this class ???
+ */
 
-	int countGPU; //!< The idx of GPU to use.
 
-	//! Number of mcs to be executed per GPU-call
-	uint32_t nsteps;
+template< class T_IngredientsType >
+class GPUScBFM_AB_Type : public AbstractUpdater
+{
+public:
+    typedef T_IngredientsType IngredientsType;
+    typedef typename T_IngredientsType::molecules_type MoleculesType;
 
 protected:
-  IngredientsType& ingredients;
-  IngredientsType& getIngredients() {return ingredients;}
+    IngredientsType & mIngredients;
+    MoleculesType   & molecules   ;
 
-  typename IngredientsType::molecules_type& molecules;
+private:
+    UpdaterGPUScBFM_AB_Type mUpdaterGpu;
+    int miGpuToUse;
+    //! Number of Monte-Carlo Steps (mcs) to be executed (per GPU-call / Updater call)
+    uint32_t mnSteps;
+
+protected:
+    inline T_IngredientsType & getIngredients() { return mIngredients; }
 
 public:
-  /**
-   * @brief Standard Constructor: Initialize the Ingredients and specify the GPU.
-   *
-   * @param val A reference to the IngredientsType - mainly the system
-   * @param steps Number of mcs to be executed per GPU-call
-   * @param whichGPU Index/count of the GPU to use. Default: 0
-   */
-	GPUScBFM_AB_Type(IngredientsType& val,uint32_t steps, int whichGPU=0):ingredients(val),molecules(val.modifyMolecules()),nsteps(steps), countGPU(whichGPU){};
+    /**
+     * @brief Standard constructor: initialize the ingredients and specify the GPU.
+     *
+     * @param rIngredients  A reference to the IngredientsType - mainly the system
+     * @param rnSteps       Number of mcs to be executed per GPU-call
+     * @param riGpuToUse    ID of the GPU to use. Default: 0
+     */
+    inline GPUScBFM_AB_Type
+    (
+        T_IngredientsType & rIngredients,
+        uint32_t            rnSteps     ,
+        int                 riGpuToUse = 0
+    )
+    : mIngredients( rIngredients                   ),
+      molecules   ( rIngredients.modifyMolecules() ),
+      miGpuToUse  ( riGpuToUse                     ),
+      mnSteps     ( rnSteps                        )
+    {}
 
-	virtual ~GPUScBFM_AB_Type(){};
+    /**
+     * https://stackoverflow.com/questions/461203/when-to-use-virtual-destructors
+     * I don't see a reason for using 'virtual' if this class will never be
+     * derived from.
+     */
+    inline ~GPUScBFM_AB_Type(){}
 
-	void initialize() {
+    /**
+     * Copies required data and parameters from mIngredients to mUpdaterGpu
+     * and calls the mUpdaterGpu initializer
+     */
+    inline void initialize()
+    {
+        /* Forward needed parameters to the GPU updater */
+        mUpdaterGpu.setPeriodicity( mIngredients.isPeriodicX(),
+                                    mIngredients.isPeriodicY(),
+                                    mIngredients.isPeriodicZ() );
 
-		// set nr of all monomers
-		Updater_GPUScBFM_AB_Type.setNrOfAllMonomers(ingredients.getMolecules().size());
+        /* set num of HEP, PEG, PEGArm, Crosslinks. These getter functions
+         * are provided by the FeatureNetwork.h feature */
+        mUpdaterGpu.setNetworkIngredients( mIngredients.getNrOfStars(),
+                                           mIngredients.getNrOfMonomersPerStarArm(),
+                                           mIngredients.getNrOfCrosslinker() );
 
-		// set periodicity
-		Updater_GPUScBFM_AB_Type.setPeriodicity(ingredients.isPeriodicX(), ingredients.isPeriodicY(), ingredients.isPeriodicZ());
+        /* copy monomer positions, attributes and connectivity of all monomers */
+        mUpdaterGpu.setNrOfAllMonomers( mIngredients.getMolecules().size() );
+        for ( size_t i = 0u; i < mIngredients.getMolecules().size(); ++i )
+        {
+            mUpdaterGpu.setMonomerCoordinates( i, molecules[i].getX(),
+                                                  molecules[i].getY(),
+                                                  molecules[i].getZ() );
+        }
+        for ( size_t i = 0u; i < mIngredients.getMolecules().size(); ++i )
+            mUpdaterGpu.setAttribute( i, mIngredients.getMolecules()[i].getAttributeTag() );
+        for ( size_t i = 0u; i < mIngredients.getMolecules().size(); ++i )
+        for ( size_t iBond = 0; iBond < mIngredients.getMolecules().getNumLinks(i); ++iBond )
+            mUpdaterGpu.setConnectivity( i, mIngredients.getMolecules().getNeighborIdx( i, iBond ) );
 
-		//set num of HEP, PEG, PEGArm, Crosslinks
-		Updater_GPUScBFM_AB_Type.setNetworkIngredients(ingredients.getNrOfStars(), ingredients.getNrOfMonomersPerStarArm(), ingredients.getNrOfCrosslinker());
+        mUpdaterGpu.setLatticeSize( mIngredients.getBoxX(),
+                                    mIngredients.getBoxY(),
+                                    mIngredients.getBoxZ() );
+        mUpdaterGpu.populateLattice(); /* needs data set by setMonomerCoordinates. Is this actually needed ??? */
 
-		// copy monomer positions of all monomers
-		for(int i = 0; i < ingredients.getMolecules().size(); i++)
-			Updater_GPUScBFM_AB_Type.setMonomerCoordinates(i, molecules[i].getX(), molecules[i].getY(), molecules[i].getZ());
+         // false-allowed; true-forbidden
+        std::cout << "[" << __FILENAME__ << "] copy bondset" << std::endl;
+        /* maximum of (expected!!!) bond length in one dimension. Should be
+         * queryable or there should be a better way to copy the bond set.
+         * Note that supported range is [-4,3] */
+        int const maxBondLength = 4;
+        for ( int dx = -maxBondLength; dx < maxBondLength; ++dx )
+        for ( int dy = -maxBondLength; dy < maxBondLength; ++dy )
+        for ( int dz = -maxBondLength; dz < maxBondLength; ++dz )
+        {
+            /* !!! The negation is confusing, again there should be a better way to copy the bond set */
+            mUpdaterGpu.copyBondSet( dx, dy, dz, ! mIngredients.getBondset().isValid( VectorInt3( dx, dy, dz ) ) );
+        }
 
+        std::cout << "[" << __FILENAME__ << "] initialize GPU updater" << std::endl;
+        mUpdaterGpu.initialize( miGpuToUse );
+    }
 
-		// copy attributes of all monomers
-		for(int i = 0; i < ingredients.getMolecules().size(); i++)
-			Updater_GPUScBFM_AB_Type.setAttribute(i, ingredients.getMolecules()[i].getAttributeTag());
+    /**
+     * Was the 'virtual' really necessary ??? I don't think there will ever be
+     * some class inheriting from this class...
+     * https://en.wikipedia.org/wiki/Virtual_function
+     */
+    inline bool execute()
+    {
+        std::clock_t const t0 = std::clock();
 
-		// copy connectivity of all monomers
-		for(int idx = 0; idx < ingredients.getMolecules().size(); idx++)
-			for(int jbond = 0; jbond < ingredients.getMolecules().getNumLinks(idx); jbond++)
-			{
-				Updater_GPUScBFM_AB_Type.setConnectivity(idx, ingredients.getMolecules().getNeighborIdx(idx, jbond));
-			}
+        std::cout << "[" << __FILENAME__ << "] MCS:" << mIngredients.getMolecules().getAge() << std::endl;
+        std::cout << "[" << __FILENAME__ << "] start simulation on GPU" << std::endl;
 
-		//set lattice size
-		Updater_GPUScBFM_AB_Type.setLatticeSize(ingredients.getBoxX(), ingredients.getBoxY(), ingredients.getBoxZ());
+        mUpdaterGpu.runSimulationOnGPU( mnSteps );
 
-		//populate lattice
-		Updater_GPUScBFM_AB_Type.populateLattice();
+        // copy back positions of all monomers
+        std::cout << "[" << __FILENAME__ << "] copy back monomers from GPU updater to CPU 'molecules' to be used with analyzers" << std::endl;
+        for( size_t i = 0; i < mIngredients.getMolecules().size(); ++i )
+        {
+            molecules[i].setAllCoordinates
+            (
+                mUpdaterGpu.getMonomerPositionInX(i),
+                mUpdaterGpu.getMonomerPositionInY(i),
+                mUpdaterGpu.getMonomerPositionInZ(i)
+            );
+        }
 
-		 //false-allowed; true-forbidden
-		std::cout << "copy bondset" << std::endl;
-		for (int dx=-4; dx <= 4; dx++)
-			for (int dy=-4; dy <= 4; dy++)
-				for (int dz=-4; dz <= 4; dz++)
-				{
-					Updater_GPUScBFM_AB_Type.copyBondSet(dx, dy, dz, !ingredients.getBondset().isValid(VectorInt3(dx, dy, dz)));
-				}
+        /* update number of total simulation steps already done */
+        mIngredients.modifyMolecules().setAge( mIngredients.modifyMolecules().getAge()+ mnSteps );
 
-		std::cout << "initialize GPU" << std::endl;
-		Updater_GPUScBFM_AB_Type.initialize(countGPU);
+        std::clock_t const t1 = std::clock();
+        double const dt = (double) ( t1 - t0 ) / CLOCKS_PER_SEC;    // in seconds
+        /* attempted moves per second */
+        double const amps = ( (double) mnSteps * mIngredients.getMolecules().size() )/ dt;
 
-	}
-	virtual bool execute() {
+        std::cout
+        << "[" << __FILENAME__ << "] mcs " << mIngredients.getMolecules().getAge()
+        << " with " << amps << " [attempted moves/s]\n"
+        << "[" << __FILENAME__ << "] mcs " << mIngredients.getMolecules().getAge()
+        << " passed time " << dt << " [s] with " << mnSteps << " MCS "
+        << std::endl;
 
-		time_t startTimer = time(NULL); //in seconds
-		std::cout<<"MCS:"<<ingredients.getMolecules().getAge()<<std::endl;
+        return true;
+    }
 
-		std::cout << "start simulation on GPU"  << std::endl;
-
-		Updater_GPUScBFM_AB_Type.runSimulationOnGPU(nsteps);
-
-		std::cout << "copy back monomers"  << std::endl;
-		// copy back positions of all monomers
-		for(int idx = 0; idx < ingredients.getMolecules().size(); idx++)
-			molecules[idx].setAllCoordinates(Updater_GPUScBFM_AB_Type.getMonomerPositionInX(idx), Updater_GPUScBFM_AB_Type.getMonomerPositionInY(idx), Updater_GPUScBFM_AB_Type.getMonomerPositionInZ(idx));
-
-		ingredients.modifyMolecules().setAge(ingredients.modifyMolecules().getAge()+nsteps);
-
-		std::cout<<"mcs "<<ingredients.getMolecules().getAge() << " with " << (((1.0*nsteps)*ingredients.getMolecules().size())/(difftime(time(NULL), startTimer)) ) << " [attempted moves/s]" <<std::endl;
-		std::cout<<"mcs "<<ingredients.getMolecules().getAge() << " passed time " << ((difftime(time(NULL), startTimer)) ) << " [s] with " << nsteps << " MCS "<<std::endl;
-
-
-		return true;
-
-	}
-	void cleanup() {
-		std::cout << "cleanup" << std::endl;
-		Updater_GPUScBFM_AB_Type.cleanup();
-	}
+    inline void cleanup()
+    {
+        std::cout << "[" << __FILENAME__ << "] cleanup" << std::endl;
+        mUpdaterGpu.cleanup();
+    }
 };
-
-#endif
-
