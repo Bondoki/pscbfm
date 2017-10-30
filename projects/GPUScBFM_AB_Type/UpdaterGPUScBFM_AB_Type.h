@@ -85,7 +85,12 @@ private:
     intCUDA * mPolymerSystem_device;
     //MirroredTexture< intCUDA > * mPolymerSystem;
 
-    int32_t *  mAttributeSystem;
+    /* for each monomer the attribute 1 (A) or 2 (B) is stored
+     * -> could be 1 bit per monomer ... !!!
+     * @see http://www.gotw.ca/gotw/050.htm
+     * -> wow std::vector<bool> already optimized for space with bit masking!
+     * This is only needed once for initializing mMonomerIdsA,B */
+    int32_t * mAttributeSystem;
 
     /* stores amount and IDs of neighbors for each monomer */
 public:
@@ -131,6 +136,7 @@ private:
 public:
     UpdaterGPUScBFM_AB_Type();
     virtual ~UpdaterGPUScBFM_AB_Type();
+    void destruct();
 
     void initialize( int iGpuToUse );
     inline bool execute(){ return true; }
@@ -138,12 +144,12 @@ public:
 
     /* setter methods */
     void copyBondSet( int dx, int dy, int dz, bool bondForbidden );
-    inline void setAttribute( uint32_t i, int32_t attribute ){ mAttributeSystem[i] = attribute; }
-    void setNrOfAllMonomers( uint32_t nAllMonomers );
+    inline void setAttribute  ( uint32_t i, int32_t attribute ){ mAttributeSystem[i] = attribute; }
+    void setNrOfAllMonomers   ( uint32_t nAllMonomers );
     void setNetworkIngredients( uint32_t numPEG, uint32_t numPEGArm, uint32_t numCL );
     void setMonomerCoordinates( uint32_t i, int32_t x, int32_t y, int32_t z );
-    void setConnectivity( uint32_t monoidx1, uint32_t monoidx2 );
-    void setLatticeSize( uint32_t boxX, uint32_t boxY, uint32_t boxZ );
+    void setConnectivity      ( uint32_t monoidx1, uint32_t monoidx2 );
+    void setLatticeSize       ( uint32_t boxX, uint32_t boxY, uint32_t boxZ );
 
     /**
      * sets monomer positions given in mPolymerSystem in mLattice to occupied
@@ -156,5 +162,4 @@ public:
     int32_t getMonomerPositionInZ( uint32_t i );
 
     void setPeriodicity( bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ );
-
 };

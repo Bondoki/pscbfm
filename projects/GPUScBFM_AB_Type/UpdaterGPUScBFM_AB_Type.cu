@@ -38,10 +38,9 @@ __device__ __constant__ intCUDA DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
-__device__ __constant__ uint32_t dcBoxXM1  ;  // mLattice size in X-1
-__device__ __constant__ uint32_t dcBoxYM1  ;  // mLattice size in Y-1
-__device__ __constant__ uint32_t dcBoxZM1  ;  // mLattice size in Z-1
-
+__device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
+__device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
+__device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
 __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
@@ -560,20 +559,40 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    nMonomersSpeciesB    ( 0 )
 {}
 
+/**
+ * Deletes everything which could and is allocated
+ */
+void UpdaterGPUScBFM_AB_Type::destruct()
+{
+    if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }  // setLatticeSize
+    if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }  // initialize
+    if ( mLatticeTmp      != NULL ){ delete   mLatticeTmp     ; mLatticeTmp      = NULL; }  // initialize
+    if ( mPolymerSystem   != NULL ){ delete[] mPolymerSystem  ; mPolymerSystem   = NULL; }  // setNrOfAllMonomers
+    if ( mPolymerSystem_device != NULL ){ cudaFree( mPolymerSystem_device ); mPolymerSystem_device = NULL; } // initiailize
+    if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }  // setNrOfAllMonomers
+    if ( mNeighbors       != NULL ){ delete   mNeighbors      ; mNeighbors       = NULL; }  // setNrOfAllMonomers
+    if ( mMonoInfo        != NULL ){ delete   mMonoInfo       ; mMonoInfo        = NULL; }  // initialize
+    if ( mMonomerIdsA     != NULL ){ delete   mMonomerIdsA    ; mMonomerIdsA     = NULL; }  // initialize
+    if ( mMonomerIdsB     != NULL ){ delete   mMonomerIdsB    ; mMonomerIdsB     = NULL; }  // initialize
+}
+
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
 {
-    if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }
-    if ( mPolymerSystem   != NULL ){ delete[] mPolymerSystem  ; mPolymerSystem   = NULL; }
-    if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }
-    if ( mNeighbors       != NULL ){ delete   mNeighbors      ; mNeighbors       = NULL; }
-    if ( mMonomerIdsA     != NULL ){ delete   mMonomerIdsA    ; mMonomerIdsA     = NULL; }
-    if ( mMonomerIdsB     != NULL ){ delete   mMonomerIdsB    ; mMonomerIdsB     = NULL; }
-    if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }
-    if ( mLatticeTmp      != NULL ){ delete   mLatticeTmp     ; mLatticeTmp      = NULL; }
+    this->destruct();
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
 {
+    if ( mLatticeOut != NULL || mLatticeTmp != NULL || mMonoInfo != NULL ||
+         mMonomerIdsA != NULL || mMonomerIdsB != NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::initialize] "
+            << "Initialize was already called and may not be called again "
+            << "until cleanup was called!";
+        throw std::runtime_error( msg.str() );
+    }
+
     int nGpus;
     getCudaDeviceProperties( NULL, &nGpus, true /* print GPU information */ );
     if ( iGpuToUse >= nGpus )
@@ -678,10 +697,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( int iGpuToUse )
     CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
     CUDA_CHECK( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
 
-    if ( mLatticeOut == NULL )
-        mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
-    if ( mLatticeTmp == NULL )
-        mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
+    mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
+    mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ );
     CUDA_CHECK( cudaMemset( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes ) );
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
@@ -1040,7 +1057,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                         nMonomersSpeciesA, randomNumbers.r250_rand32(),
                         mLatticeOut->texture
                     );
-                    CUDA_CHECK( cudaDeviceSynchronize() );
+                    CUDA_CHECK( cudaDeviceSynchronize() );  // for debug purposes. Might hinder performance
                     kernelSimulationScBFMPerformSpecies
                     <<< nBlocksSpeciesA, nThreads >>>(
                         mPolymerSystem_device, mLatticeOut->gpu,
@@ -1111,12 +1128,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 uint32_t yl = 2*( deinterleave3_Y((dummyhost % (1 <<23)))) + onX;
                 uint32_t xl = 2*( deinterleave3_X((dummyhost % (1 <<23)))) + onX;
 
-
                 //cout << "X: " << xl << "\tY: " << yl << "\tZ: " << zl<< endl;
                 mLattice[xl + (yl << LATTICE_XPRO) + (zl << LATTICE_PROXY)] = 1;
-
             }
-
         }
         //end -z-order
     */
@@ -1137,7 +1151,11 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 }
 
 /**
- * This only should undo the task done by initialize, nothing more ???
+ * GPUScBFM_AB_Type::initialize and run and cleanup should be usable on
+ * repeat. Which means we need to destruct everything created in
+ * GPUScBFM_AB_Type::initialize, which encompasses setLatticeSize,
+ * setNrOfAllMonomers and initialize. Currently this includes all allocs,
+ * so we can simply call destruct.
  */
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
@@ -1156,12 +1174,5 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
             throw std::runtime_error( msg.str() );
         }
     }
-
-    cudaFree( mPolymerSystem_device );
-    if ( mPolymerSystem != NULL ){ delete[] mPolymerSystem; mPolymerSystem = NULL; }
-    if ( mMonomerIdsA   != NULL ){ delete   mMonomerIdsA  ; mMonomerIdsA   = NULL; }
-    if ( mMonomerIdsB   != NULL ){ delete   mMonomerIdsB  ; mMonomerIdsB   = NULL; }
-    if ( mLatticeOut    != NULL ){ delete   mLatticeOut   ; mLatticeOut    = NULL; }
-    if ( mLatticeTmp    != NULL ){ delete   mLatticeTmp   ; mLatticeTmp    = NULL; }
-    if ( mMonoInfo      != NULL ){ delete   mMonoInfo     ; mMonoInfo      = NULL; }
+    this->destruct();
 }
