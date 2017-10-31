@@ -109,18 +109,18 @@ public:
 	}
 
 	;
-	
+
 	//We need 3 Features to handle the oscillatory forces
 	//typedef LOKI_TYPELIST_2(FeatureAttributes,FeatureBoltzmann) required_features_back;
-	
+
 	//! For all unknown moves: this does nothing
-	template<class IngredientsType> 
+	template<class IngredientsType>
 	bool checkMove(const IngredientsType& ingredients,const MoveBase& move) const;
-	
+
 	//! Overloaded for moves of type MoveScMonomer to check for sinusoidal movement
 	//template<class IngredientsType>
 	//bool checkMove(const IngredientsType& ingredients,MoveLocalSc& move) const;
-	
+
 	//! Synchronize with system: check for right torque machines.
 	template<class IngredientsType>
 	void synchronize(IngredientsType& ingredients);
@@ -128,13 +128,13 @@ public:
 	//! Export the relevant functionality for reading bfm-files to the responsible reader object
 	template <class IngredientsType>
 	void exportRead(FileImport <IngredientsType>& fileReader);
-	
+
 	 //! Export the relevant functionality for writing bfm-files to the responsible writer object
 	template <class IngredientsType>
 	void exportWrite(AnalyzerWriteBfmFile <IngredientsType>& fileWriter) const;
 
 private:
-	
+
 
 	uint32_t NrOfStars; //number of Stars
 	uint32_t NrOfStarsOld; //number of Stars in creational process
@@ -142,7 +142,7 @@ private:
 	uint32_t NrOfCrosslinker; //number of Crosslinker
 	uint32_t NrOfCrosslinkerOld; //number of Crosslinker in creational process
 	uint32_t CrosslinkerFunctionality; //chem. functionality of Crosslinker
-	
+
 
 };
 
