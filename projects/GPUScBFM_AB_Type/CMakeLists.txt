@@ -46,7 +46,7 @@ endif()
 
 cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type UpdaterGPUScBFM_AB_Type.cu mainCUDASimulatorGPUScBFM_AB_Type.cpp )
 #message("project_build_static = ${project_build_static}")
-if( ( NOT DEFINED project_build_static ) OR ( project_build_static ) )
+if( project_build_static )
     target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type libLeMonADE-static )
 else()
     link_directories( "${LEMONADE_LIBRARY_DIR}" )
