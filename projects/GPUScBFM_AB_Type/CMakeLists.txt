@@ -2,11 +2,6 @@ cmake_minimum_required( VERSION 2.8 )
 
 FIND_PACKAGE( CUDA REQUIRED )
 
-#INCLUDE(FindCUDA)
-#set(CUDA_INSTALL_PATH  /usr/local/cuda)
-#set(CXX /opt/gcc-4.4.6/bin/g++)
-#set(INCLUDED  ${CUDA_INSTALL_PATH}/include)
-
 # sauron
 #SET(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}
 #        -lineinfo -gencode arch=compute_20,code=sm_20 --compiler-bindir ${CXX} -I${INCLUDED})
@@ -23,12 +18,9 @@ FIND_PACKAGE( CUDA REQUIRED )
 #for gandalf P100
 #SET(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -lineinfo -gencode arch=compute_60,code=sm_60)
 
-
-set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --compiler-bindir /usr/bin/g++-4.9 -std=c++11 )
-set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -lineinfo -gencode arch=compute_30,code=sm_30 )
-if ( CMDAKE_BUILD_TYPE STREQUAL "Debug" )
-    set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g -Wall -X Wall,Wextra )
-endif()
+message( "Compile for sm_${CUDA_ARCH}" )
+# Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
+set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} )
 
 
 if( NOT DEFINED LEMONADE_INCLUDE_DIR )

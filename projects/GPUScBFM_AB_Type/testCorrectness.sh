@@ -4,7 +4,7 @@ function checkSc()
     sTime=$( date +%Y-%m-%dT%H-%M-%S )
     logFile=run-$name-$sTime.log
     rm result.bfm
-    cmake -DCMAKE_BUILD_TYPE=Release -DINSTALLDIR_LEMONADE="$( cd .. && pwd )/install" .. &&
+    cmake -DCMAKE_BUILD_TYPE=Release -DINSTALLDIR_LEMONADE="$( cd .. && pwd )/install" -DCUDA_ARCH:STRING=30 -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9 .. &&
     make &&
     #time \#
     cuda-memcheck --leak-check full \
