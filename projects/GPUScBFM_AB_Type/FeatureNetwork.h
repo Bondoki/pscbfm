@@ -6,8 +6,6 @@
 #include <LeMonADE/io/AbstractRead.h>
 #include <LeMonADE/io/AbstractWrite.h>
 #include <LeMonADE/io/FileImport.h>
-#include <LeMonADE/updater/moves/MoveBase.h>
-#include <LeMonADE/updater/moves/MoveAddScMonomer.h>
 
 
 /**
