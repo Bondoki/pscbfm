@@ -1258,25 +1258,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         << "particles in a (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") box "
         << "=> " << 100. * nAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
-
-    /* calculate kernel configurations */
-    CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
-    CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
-    mnBlocksForGroup.resize( mnElementsInGroup.size(), 0 );
-    for ( size_t i = 0u; i < mnBlocksForGroup.size(); ++i )
-    {
-        auto const nConcThreads = mCudaProps.maxThreadsPerMultiProcessor
-                                * mCudaProps.multiProcessorCount;
-        mnBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], mnThreads ); /*std::min< size_t >(
-            ceilDiv( nConcThreads, mnThreads ),
-            ceilDiv( mnElementsInGroup[i], mnThreads )
-        );*/
-
-        mLog( "Info" )
-        << "Will start kernels for species " << char( 'A' + i )
-        << " with " << mnBlocksForGroup[i] << " blocks with each "
-        << mnThreads << " threads\n";
-    }
 }
 
 
@@ -1653,7 +1634,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             /* randomly choose which monomer group to advance */
             auto const iSpecies = randomNumbers.r250_rand32() % mnElementsInGroup.size();
             auto const seed     = randomNumbers.r250_rand32();
-            auto const nBlocks  = mnBlocksForGroup.at( iSpecies );
+            auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], mnThreads1 );
             auto const nPitchCompacted = ceilDiv( mnElementsInGroup[ iSpecies ], nBlocks );
 
             /*
@@ -1662,7 +1643,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             */
 
             kernelSimulationScBFMCheckSpecies
-            <<< nBlocks, mnThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads1, 0, mStream >>>(
                 mPolymerSystemSorted->gpu,
                 iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
@@ -1677,7 +1658,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( iStep < 0 )
             {
                 nRemainingPerBlock.pop();
-                std::cout << "Remaining monomers per each of the " << nBlocks << " blocks a " << mnThreads << " threads at step " << iStep << " substep " << iSubStep << ":";
+                std::cout << "Remaining monomers per each of the " << nBlocks << " blocks a " << mnThreads1 << " threads at step " << iStep << " substep " << iSubStep << ":";
                 for ( auto i = 0u; i < nBlocks; ++i )
                     std::cout << ( i % 16 == 0 ? "\n" : " " ) << std::setw(3) << nRemainingPerBlock.host[i];
                 std::cout << std::endl;
@@ -1702,7 +1683,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredCheck
-                <<< nBlocks, mnThreads, 0, mStream >>>(
+                <<< nBlocks, mnThreads1, 0, mStream >>>(
                     mPolymerSystemSorted->gpu,
                     iSubGroupOffset[ iSpecies ],
                     mLatticeTmp->gpu,
@@ -1716,7 +1697,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
 
             kernelSimulationScBFMPerformSpecies
-            <<< nBlocks, mnThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads2, 0, mStream >>>(
                 mLatticeOut->gpu,
                 mLatticeTmp->texture,
                 nRemainingPerBlock.gpu, compactedPositions.gpu, compactedFlags.gpu, nPitchCompacted
@@ -1725,7 +1706,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredPerform
-                <<< nBlocks, mnThreads, 0, mStream >>>(
+                <<< nBlocks, mnThreads2, 0, mStream >>>(
                     mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
@@ -1736,7 +1717,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
 
             kernelSimulationScBFMZeroArraySpecies
-            <<< nBlocks, mnThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads3, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
                 nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, compactedFlags.gpu, nPitchCompacted
