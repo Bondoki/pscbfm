@@ -196,11 +196,6 @@ cuda_add_executable( ${BIN_NAME}
 target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} cuda )
 
 
-# CLI for coloring a BFM file
-add_executable( colorBFM src/pscbfm/mainColorBFM.cpp )
-target_link_libraries( colorBFM ${LEMONADE_LIBRARY} cuda )
-
-
 # minimalistic gpuinfo tool printing all properties
 set_source_files_properties( src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
 set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )

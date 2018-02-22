@@ -617,70 +617,6 @@ inline std::string prettyPrintBytes
 
 #if defined( __CUDACC__ )
 
-/**
- * Chooses an optimal configuration for number of blocks and number of threads
- * Note that every kernel may have to calculate on a different amount of
- * elements, so this needs to be calculated inside the kernel with:
- *    for ( i = linid; i < nElements; i += nBlocks * nThreads )
- * which yields the following number of iterations:
- *    nIterations = (nElements-1 - linid) / ( nBlocks * nThreads ) + 1
- * derivation:
- *    search for highest n which satisfies i + n*s <= m-1
- *    note that we used <= m-1 instead of < m to work with floor later on
- *    <=> search highest n: n <= (m-1-i)/s
- *    which is n = floor[ (m-1-i)/s ]. Note that floor wouldn't be possible
- *    for < m, because it wouldn't account for the edge case for (m-1-i)/s == n
- *    the highest n means the for loop will iterate with i, i+s, i+2*s, i+...n*s
- *    => nIterations = n+1 = floor[ (m-1-i)/s ] + 1
- */
-inline void calcKernelConfig( int iDevice, uint64_t n, int * nBlocks, int * nThreads )
-{
-    int const nMaxThreads  = 256;
-    int const nMinElements = 32; /* The assumption: one kernel with nMinElements work won't be much slower than nMinElements kernels with each 1 work element. Of course this is workload / kernel dependent, so the fixed value may not be the best idea */
-
-    /* set current device and get device infos */
-    int nDevices;
-    CUDA_ERROR( cudaGetDeviceCount( &nDevices ) );
-    assert( iDevice < nDevices );
-    CUDA_ERROR( cudaSetDevice( iDevice ) );
-
-    // for GTX 760 this is 12288 threads per device and 384 real cores
-    cudaDeviceProp deviceProperties;
-    CUDA_ERROR( cudaGetDeviceProperties( &deviceProperties, iDevice) );
-
-    int const nMaxThreadsGpu = deviceProperties.maxThreadsPerMultiProcessor
-                             * deviceProperties.multiProcessorCount;
-    if ( n < (uint64_t) nMaxThreadsGpu * nMinElements )
-    {
-        uint64_t const nThreadsNeeded = ceilDiv( n, nMinElements );
-        *nBlocks  = ceilDiv( nThreadsNeeded, nMaxThreads );
-        *nThreads = nMaxThreads;
-        if ( *nBlocks == 1 )
-        {
-            assert( nThreadsNeeded <= nMaxThreads );
-            *nThreads = nThreadsNeeded;
-        }
-    }
-    else
-    {
-        assert( nMaxThreads > 0 );
-        *nBlocks  = nMaxThreadsGpu / nMaxThreads;
-        *nThreads = nMaxThreads;
-    }
-    assert( *nBlocks > 0 );
-    assert( *nThreads > 0 );
-    uint64_t nIterations = 0;
-    for ( uint64_t linid = 0; linid < (uint64_t) *nBlocks * *nThreads; ++linid )
-    {
-        /* note that this only works if linid < n */
-        assert( linid < n );
-        nIterations += (n-linid-1) / ( *nBlocks * *nThreads ) + 1;
-        //printf( "[thread %i] %i elements\n", linid, (n-linid) / ( *nBlocks * *nThreads ) );
-    }
-    //printf( "Total %i elements out of %i wanted\n", nIterations, n );
-    assert( nIterations == n );
-}
-
 
 inline __device__ unsigned long long int getLinearThreadId( void )
 {
@@ -1214,29 +1150,6 @@ inline void getCudaDeviceProperties
         free( fallbackPropArray );
 }
 
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ < 600
-/**
- * atomicAdd for double is not natively implemented, because it's not
- * supported by (all) the hardware, therefore resulting in a time penalty.
- * http://stackoverflow.com/questions/12626096/why-has-atomicadd-not-been-implemented-for-doubles
- * https://stackoverflow.com/questions/37566987/cuda-atomicadd-for-doubles-definition-error
- */
-inline __device__
-double atomicAdd( double * address, double val )
-{
-    unsigned long long int* address_as_ull =
-                             (unsigned long long int *) address;
-    unsigned long long int old = *address_as_ull, assumed;
-    do
-    {
-        assumed = old;
-        old = atomicCAS(address_as_ull, assumed,
-              __double_as_longlong( val + __longlong_as_double(assumed) ));
-    } while (assumed != old);
-    return __longlong_as_double(old);
-}
-#endif
-
 #endif // __CUDACC__
 
 
@@ -1462,92 +1375,11 @@ public:
 
 #endif // __CUDACC__
 
-
-template< class T >
-inline __device__ __host__
-void swap( T & a, T & b )
+template< class T > __device__ inline void swap( T & a, T & b )
 {
     T const c = a;
     a = b;
     b = c;
-}
-
-template< typename T >
-inline __device__ __host__
-int snprintInt
-(
-    char             * const msg  ,
-    unsigned int       const nChars,
-    T                        number,
-    unsigned short int const base = 10u
-)
-{
-    assert( base <= ( '9' - '0' + 1 ) + ( 'Z' - 'A' + 1 ) && "base was chosen too high, not sure how to convert that to characters!" );
-
-    unsigned int nCharsWritten = 0u;
-    if ( nCharsWritten+1 >= nChars )
-        return 0;
-    else if ( number < 0 )
-    {
-        msg[ nCharsWritten++ ] = '-';
-        number = -number;
-    }
-
-    unsigned int expFloorLogBase = 1;
-    while ( number / expFloorLogBase >= base )
-        expFloorLogBase *= base;
-
-    /* e.g. a possible run for 1230:
-     *   digit 0 = 1 = 1230 / 1000
-     *   digit 1 = 2 = 230  / 100
-     *   digit 2 = 3 = 30   / 10
-     *   digit 3 = 0 = 0    / 1 */
-    while ( expFloorLogBase != 0 )
-    {
-        unsigned int const digit = number / expFloorLogBase;
-        number          %= expFloorLogBase;
-        expFloorLogBase /= base;
-        assert( digit <= base );
-
-        if ( nCharsWritten+1 < nChars )
-        {
-            if ( digit < '9' - '0' + 1 )
-                msg[ nCharsWritten++ ] = '0' + (unsigned char) digit;
-            else if ( digit - ( '9' - '0' + 1 ) < 'Z' - 'A' + 1u )
-                msg[ nCharsWritten++ ] = 'Z' + (unsigned char)( digit - ( '9' - '0' + 1u ) );
-            else
-                assert( false && "base was chosen too high, not sure how to convert that to characters!" );
-        }
-        else
-            break;
-    }
-
-    assert( nCharsWritten+1 <= nChars ); // includes nChars > 0
-    msg[ nCharsWritten ] = '\0';
-    return nCharsWritten;
-}
-
-inline __device__ __host__
-int snprintFloatArray
-(
-    char        * const msg  ,
-    unsigned int  const nChars,
-    float const * const gpData,
-    unsigned int  const nElements
-)
-{
-    unsigned int nCharsWritten = 0u;
-    for ( unsigned int j = 0u; j < nElements; ++j )
-    {
-        if ( nCharsWritten + 1 >= nChars )
-            break;
-        msg[ nCharsWritten++ ] = ' ';
-        //nCharsWritten += snprintFloat( msg, nChars - nCharsWritten, gpData[j] );
-        nCharsWritten += snprintInt( msg + nCharsWritten, nChars - nCharsWritten, (int)( 10000 * gpData[j] ) );
-    }
-    assert( nCharsWritten < nChars );
-    msg[ nCharsWritten ] = '\0';
-    return nCharsWritten;
 }
 
 #if __cplusplus >= 201103

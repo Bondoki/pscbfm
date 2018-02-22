@@ -17,17 +17,6 @@
 #include <vector>
 #include <stack>
 
-#define DEBUG_GRAPHCOLORING_CPP 0
-#if DEBUG_GRAPHCOLORING_CPP >= 20
-#   define DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS    // uncomment if not wanted
-#endif
-#if DEBUG_GRAPHCOLORING_CPP >= 20 // #ifndef NDEBUG
-#   include <stdexcept>                 // logic_error
-#endif
-
-#ifdef DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS
-#   include <fstream>
-#endif
 
 
 namespace { // anonymous namespace with functions only to be used inside this file
@@ -60,14 +49,6 @@ inline void bubbleSort
             }
         }
     }
-    #if DEBUG_GRAPHCOLORING_CPP >= 20 // #ifndef NDEBUG
-        T_RandomIt jp1 = i0; ++jp1;
-        for ( T_RandomIt j = i0; jp1 != i1; ++j, ++jp1 )
-        {
-            if ( ! cmp( *j, *jp1 ) )
-                throw std::logic_error( "Vector not sorted after call to Bubble sort! This e.g. can happen if an < operator was passed instead of an <= operator!" );
-        }
-    #endif
 }
 
 template< typename T, typename T_Comparator >
@@ -88,13 +69,6 @@ void bubbleSort( std::vector< T > & v, T_Comparator const & cmp )
         }
         nUnsorted = iLastSwap+1;
     }
-    #if DEBUG_GRAPHCOLORING_CPP >= 20 // #ifndef NDEBUG
-        for ( size_t j = 0u; j < nUnsorted-1; ++j )
-        {
-            if ( ! cmp( v[j], v[j+1] ) )
-                throw std::logic_error( "[OLD bubbleSort] Vector not sorted after call to Bubble sort!" );
-        }
-    #endif
 }
 
 } // anonymous namespace
@@ -119,31 +93,12 @@ std::vector< T_Color > graphColoring
     std::vector< T_Color > vColors( rnElements, cNoColor ); // the end result, which is to be returned
     std::map< T_Color, bool > vbColorUsed; // In each loop this will be used to check which colors can still be assigned to the current node. Note that default constructor for bool is false
 
-    #ifdef DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS
-        std::ofstream fileSteps( "graphColoringSteps.txt", std::ios::out );
-    #endif
     std::vector< size_t > nColorsUsed; // count how many times each color gets assigned, note that default constructor for size_t is 0. Needed for uniform coloring
-    #if DEBUG_GRAPHCOLORING_CPP >= 10
-        long long int iMaxColorUsed = -1;  // basically identical to nColorsUsed-1 for the current algorithm which assigns first the lowest possible color at each node
-        size_t nMaxConnectivity   = 0; // largest nodes, just for debug information
-        size_t nIsolatedSubgraphs = 0;
-    #endif
     for ( size_t iNode = 0u; iNode < rnElements; ++iNode )
     {
-        #if DEBUG_GRAPHCOLORING_CPP >= 100
-            std::cerr << "iNode = " << iNode << "\n";
-        #endif
-        #if DEBUG_GRAPHCOLORING_CPP >= 10
-            nMaxConnectivity = std::max( nMaxConnectivity, rfGetNeighborsSize( rvNeighbors, iNode ) );
-        #endif
-
         /* skip over colored monomers */
         if ( vColors.at( iNode ) != cNoColor )
             continue;
-
-        #if DEBUG_GRAPHCOLORING_CPP >= 10
-            ++nIsolatedSubgraphs;
-        #endif
 
         /* here we want to color the whole connected polymer by following its
          * connections. This means, that if it has multiple connections we need
@@ -197,38 +152,7 @@ std::vector< T_Color > graphColoring
                 nColorsUsed.resize( iColor+1, 0 );
             nColorsUsed[ iColor ]++;
 
-            #ifdef DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS
-                /* for debugging purposes write out attributes to file in the order they are assigned */
-                fileSteps << iNodeIsolatedGraph+1 << "-" << iNodeIsolatedGraph+1 << ":" << iColor+1 << "\n";
-            #endif
-            #if DEBUG_GRAPHCOLORING_CPP >= 10
-                iMaxColorUsed = std::max( iMaxColorUsed, iColor );
-            #endif
-            #if DEBUG_GRAPHCOLORING_CPP >= 100
-                std::cerr << "Currently at monomer " << iNodeIsolatedGraph << " / " << rnElements << " which has " << nUncoloredNeighbors << " uncolored neighbors, the first being " << iFirstUncoloredNeighbor  << " and the first available color being " << iColor << std::endl;
-                /* Display color frequencies, e.g.: A:1200, B:600, C:10, D:1 */
-                std::cerr << "Color usage frequencies: ";
-                for ( auto const & kvColor : nColorsUsed )
-                {
-                    std::cerr << char( 'A' + (char) kvColor.first ) << ": " << kvColor.second << "x (" << (float) kvColor.second / vColors.size() * 100.f << "%)";
-                    std::cerr << ", ";
-                }
-                std::cerr << std::endl;
-            #endif
-
             /* advance to next neighbor. We might need to backtrack */
-            #if DEBUG_GRAPHCOLORING_CPP >= 100
-            {
-                auto tiNodesTodo = iNodesTodo;
-                std::cerr << "iNodesTodo:";
-                while ( ! tiNodesTodo.empty() )
-                {
-                    std::cerr << " " << tiNodesTodo.top();
-                    tiNodesTodo.pop();
-                }
-                std::cerr << "\n";
-            }
-            #endif
             /* end when nothing to do anymore */
             if ( nUncoloredNeighbors == 0 && iNodesTodo.empty() )
                 break;
@@ -251,9 +175,6 @@ std::vector< T_Color > graphColoring
                 {
                     iNodeIsolatedGraph = iNodesTodo.top();
                     assert( vColors[ iNodeIsolatedGraph ] != cNoColor );
-                    #if DEBUG_GRAPHCOLORING_CPP >= 100
-                        std::cerr << "Popped node " << iNodeIsolatedGraph << " from stack\n";
-                    #endif
                     /* find first uncolored neighbor, there might not be one
                      * anymore, but if there is and there are still more
                      * uncolored besides that one, then don't pop yet from list */
@@ -273,9 +194,6 @@ std::vector< T_Color > graphColoring
                                 iFirstUncoloredNeighbor2 = idNeighbor;
                         }
                     }
-                    #if DEBUG_GRAPHCOLORING_CPP >= 100
-                        std::cerr << "[Looking for next node to work on] Currently at monomer " << iNodeIsolatedGraph << " / " << rnElements << " which has " << nUncoloredNeighbors2 << " uncolored neighbors, the first being " << iFirstUncoloredNeighbor2 << "\n";
-                    #endif
                     if ( nUncoloredNeighbors2 < 2 )
                         iNodesTodo.pop();
                     if ( iFirstUncoloredNeighbor2 != cNoNode ) // <=> nUncoloredNeighbors2 > 0
@@ -292,38 +210,11 @@ std::vector< T_Color > graphColoring
         }
         while ( true );
     }
-    #if DEBUG_GRAPHCOLORING_CPP >= 10
-        std::cerr << "Maximum number of neighbors per monomer: " << nMaxConnectivity << std::endl;
-        std::cerr << "Number of isolated subgraphs / polymers: " << nIsolatedSubgraphs << std::endl;
-        std::cerr << "Number of colors needed for the polymer system: " << iMaxColorUsed+1 << std::endl;
 
-        /* Display color frequencies, e.g.: A:1200, B:600, C:10, D:1 */
-        std::cerr << "Color usage frequencies: ";
-        for ( size_t i = 0u; i < nColorsUsed.size(); ++i )
-        {
-            std::cerr << char( 'A' + (char) i ) << ": " << nColorsUsed[i] << "x (" << (float) nColorsUsed[i] / vColors.size() * 100.f << "%), ";
-        }
-        std::cerr << std::endl;
-
-        /* checks the total number of colors set against the number of elements.
-         * In an early version some nodes were set twice */
-        int nTotalColorsUsed = 0;
-        for ( auto const & count : nColorsUsed )
-            nTotalColorsUsed += count;
-        if ( (size_t) nTotalColorsUsed != vColors.size() )
-        {
-            std::stringstream msg;
-            msg << "Colors were set " << nTotalColorsUsed << " times, but only " << vColors.size() << " monomers are in the system, so some were set twice or none at all!" << std::endl;
-            throw std::runtime_error( msg.str() );
-        }
-    #endif
-
+    /* if wished, do a second run flipping the most frequent colors to the
+     * least frequent colors, until we reached unform distribution */
     if ( rbUniformColors )
     {
-        std::cerr << "Make colors uniformly distributed\n";
-        /* go through all monomers assigning to them the currently rarest color
-         * until uniform distribution is reached. For that keep a sorted list
-         * of all color frequencies */
         std::vector< std::pair< T_Color, size_t > > nColorsUsedRarestFirst( nColorsUsed.size() );
         for ( size_t i = 0u; i < nColorsUsed.size(); ++i )
         {
@@ -393,50 +284,13 @@ std::vector< T_Color > graphColoring
 
                     /* actually change color */
                     vColors[ iNode ] = newColor;
-                    #ifdef DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS
-                        /* This actually would write the attribute a second
-                         * time to the .bfm file, but this is actually allowed
-                         * LeMonADE will just overwrite the attributes with
-                         * the new one, if encountered twice */
-                        fileSteps << iNode+1 << "-" << iNode+1 << ":" << newColor+1 << "\n";
-                    #endif
                 }
             }
         }
-        #if DEBUG_GRAPHCOLORING_CPP >= 10
-            /* Display color frequencies, e.g.: A:1200, B:600, C:10, D:1 */
-            std::cerr << "Color usage frequencies: ";
-            for ( size_t i = 0u; i < nColorsUsed.size(); ++i )
-            {
-                std::cerr << char( 'A' + (char) i ) << ": " << nColorsUsed[i] << "x (" << (float) nColorsUsed[i] / vColors.size() * 100.f << "%)";
-                std::cerr << ", ";
-            }
-            std::cerr << std::endl;
-        #endif
-        }
-
-    #if DEBUG_GRAPHCOLORING_CPP >= 20
-        /* consistency check, i.e. no two neighbors shall have the same colors
-         * (normally this should be a given if the algorithm was implemented correctly) */
-        for ( size_t iNode = 0u; iNode < rnElements; ++iNode )
-        {
-            for ( unsigned int iNeighbor = 0; iNeighbor < rfGetNeighborsSize( rvNeighbors, iNode ); ++iNeighbor )
-            {
-                auto const idNeighbor = rfGetNeighbor( rvNeighbors, iNode, iNeighbor );
-                if ( vColors.at( iNode ) == vColors.at( idNeighbor ) )
-                {
-                    std::stringstream msg;
-                    msg << "Monomer " << iNode << " has the same color as it's " << iNeighbor << "-th monomer with ID " << idNeighbor << " i.e. color tag: " << (int) vColors.at( iNode ) << std::endl;
-                    throw std::runtime_error( msg.str() );
-                }
-            }
-        }
-    #endif
+    }
 
     return vColors;
 }
 
 
-#undef DEBUG_GRAPHCOLORING_CPP
-#undef DEBUG_GRAPHCOLORING_CPP_WRITE_OUT_STEPS
 #undef INLINE_GRAPHCOLORING
