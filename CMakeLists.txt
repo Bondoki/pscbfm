@@ -110,7 +110,7 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             cd build                                                        && \
             cmake -DCMAKE_CXX_COMPILER='${CMAKE_CXX_COMPILER}'                 \
                   -DINSTALLDIR_LEMONADE=.. DCMAKE_INSTALL_PREFIX=.. ..      && \
-            make install                                                       \
+            make && make install                                               \
             "
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         )
@@ -127,8 +127,7 @@ else()
 endif()
 
 include_directories( "extern/" ) # Fundamental
-add_executable( findMaxNeighbors ../src/findMaxNeighbors.cpp )
-target_link_libraries( findMaxNeighbors )
+# Might wanna link statically: https://stackoverflow.com/questions/38694058/cmake-linking-statically-against-libgcc-and-libstdc-into-a-shared-library?rq=1
 
 
 # Declare include SYSTEM, in order to suppress C++11-induced warnings from
@@ -136,14 +135,6 @@ target_link_libraries( findMaxNeighbors )
 # ‘template<class> class std::auto_ptr’ is deprecated [-Wdeprecated-declarations]
 include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} )
 link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
-
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
-add_executable( singleLinearChain ${SOURCE_FILES} )
-target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
-
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
-add_executable( mainTestAll ${SOURCE_FILES} )
-target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 find_package( CUDA REQUIRED )
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
@@ -194,14 +185,6 @@ cuda_add_executable( ${BIN_NAME}
 target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
 
 
-# Bcc BFM
-#cuda_add_executable( GPUBccBFMMeltLinearChains
-#    src/bccBFMLegacy/UpdaterGPUBccBFM.cu
-#    src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
-#)
-#target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
-
-
 # CLI for coloring a BFM file
 add_executable( colorBFM src/pscbfm/mainColorBFM.cpp )
 target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
@@ -211,41 +194,4 @@ target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
 set_source_files_properties( src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
 set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
 cuda_add_executable( gpuinfo src/gpuinfo.cpp )
-target_link_libraries( gpuinfo )
-
-
-
-### Benchmarks:
-
-# https://stackoverflow.com/questions/7787823/cmake-how-to-get-the-name-of-all-subdirectories-of-a-directory
-
-macro( subdirlist result curdir )
-    file( GLOB children RELATIVE ${curdir} ${curdir}/* )
-    set( dirlist "" )
-    foreach( child ${children} )
-        if( IS_DIRECTORY ${curdir}/${child} )
-            list( APPEND dirlist ${child} )
-        endif()
-    endforeach()
-    set( ${result} ${dirlist} )
-endmacro()
-
-if( BUILD_BENCHMARKS )
-    # don't need warnings for the older versions, don't gonna optimize them again in respect to warnings
-    set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w" )
-    set( CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -w" )
-    message( "=== Configuring Benchmarks ===" )
-    subdirlist( lsubdirs "${PROJECT_SOURCE_DIR}/benchmarks" ) # must be full path!
-    foreach( subdir ${lsubdirs} )
-        message( "Configuring benchmarks/${subdir}" )
-        set( BIN_NAME "${subdir}" )
-        set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
-        file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
-        set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
-        cuda_add_executable( benchmark-${subdir}
-            "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
-            "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
-        )
-        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} )
-    endforeach()
-endif()
+target_link_libraries( gpuinfo cuda )
