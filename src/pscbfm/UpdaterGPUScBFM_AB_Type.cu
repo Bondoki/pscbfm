@@ -97,8 +97,52 @@ template< unsigned long long int B >
 struct CeilLog<B,1> { static auto constexpr value = 0; };
 
 
-
 } // CompileTimeFunctions
+
+
+namespace BitPatterns {
+
+
+using Longest = unsigned long long int;
+using NBits   = unsigned char; /**< type for storing amounts bounded by bits of Longest */
+
+/**
+ * Returns bit step function, i.e. N 1s to the right like 0b0000111
+ */
+template< typename T, NBits N > struct Step;
+template< typename T > struct Step<T,0> { static auto constexpr value = 0; };
+template< typename T > struct Step<T,1> { static auto constexpr value = 1; };
+template< typename T, NBits N > struct Step {
+    static T constexpr value = T( Step<T,N-1>::value << 1 ) | T(1);
+};
+
+
+/**
+ * Returns rectangular wave bit pattern in largest available type,
+ * e.g. 00001110000111 for (L,M,N)=(3,4,2). Everthing left to it is
+ * filled with zeros therefore degenerating to a step function for M=0
+ * With only the type given, all available bits will be filled with the pattern
+ *
+ * @tparam T type to return
+ * @tparam L length of rectangles (number of 1s)
+ * @tparam M spacing between the rectangles (number of 0s)
+ * @tparam N number of rectangles
+ */
+template< typename T, NBits L, NBits M = L,
+    NBits N = ( L+M == 0 ? 0 : CompileTimeFunctions::ceilDiv( sizeof(T) * CHAR_BIT, L+M ) ) >
+struct RectangularWave {
+    static Longest constexpr value = ( RectangularWave<T,L,M,N-1>::value << (L+M) )
+                                     | RectangularWave<T,L,M,1>::value;
+};
+template< typename T, NBits L, NBits M > struct RectangularWave<T,L,M,0> { /* no rectangles */
+    static Longest constexpr value = 0;
+};
+template< typename T, NBits L, NBits M > struct RectangularWave<T,L,M,1> { /* one rectangle */
+    static Longest constexpr value = Step<T,L>::value;
+};
+
+} // namespace BitPatterns
+
 
 
 /* for a in-depth description see comments in Fundamental/BitsCompileTime.hpp
@@ -117,7 +161,7 @@ template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded >
 struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { __device__ __host__ inline static T apply( T const & x )
 {
     auto constexpr nBitsAllowed = 1 + ( sizeof(T) * CHAR_BIT - 1 ) / ( nSpacing + 1 );
-    return x & BitPatterns::Ones< T, nBitsAllowed >::value;
+    return x & BitPatterns::Step< T, nBitsAllowed >::value;
 } };
 
 template< typename T, unsigned char nSpacing >
