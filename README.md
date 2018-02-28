@@ -1,7 +1,7 @@
 # Compilation
 
-    git clone --recursive git@bitbucket.org:mxmlnkn/mt-progwork.git
-    cd mt-progwork && mkdir build && cd build
+    git clone --recursive https://github.com/mxmlnkn/pscbfm.git
+    cd pscbfm && mkdir build && cd build
     cmake .. -DCUDA_ARCH:STRING=35 && make -j 2
 
 Tested with:

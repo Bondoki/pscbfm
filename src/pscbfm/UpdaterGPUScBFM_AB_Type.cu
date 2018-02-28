@@ -74,6 +74,33 @@ __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
 
+namespace CompileTimeFunctions {
+
+
+template< typename T, typename S >
+inline T constexpr ceilDiv ( T a, S b )
+{
+    return ( a + b - T(1) ) / b;
+}
+
+/**
+ * Returns ceil( log_B(X) )
+ */
+template< unsigned long long int B, unsigned long long int X >
+struct CeilLog {
+    static_assert( B != 0, "" );
+    static auto constexpr value = 1 + CeilLog< B, ceilDiv(X,B) >::value;
+};
+template< unsigned long long int B >
+struct CeilLog<B,0> { static auto constexpr value = 0; };
+template< unsigned long long int B >
+struct CeilLog<B,1> { static auto constexpr value = 0; };
+
+
+
+} // CompileTimeFunctions
+
+
 /* for a in-depth description see comments in Fundamental/BitsCompileTime.hpp
  * where it was copied from */
 template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded, unsigned char iStep >
